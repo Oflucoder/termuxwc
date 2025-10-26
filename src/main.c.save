@@ -1,0 +1,216 @@
+
+#define _POSIX_C_SOURCE 200809L
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
+#include <errno.h>
+
+#include <wayland-server-core.h>
+
+#include <wlr/backend.h>
+#include <wlr/backend/headless.h>
+#include <wlr/render/wlr_renderer.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_output_layout.h>
+#include <wlr/types/wlr_scene.h>
+#include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/util/log.h>
+
+#include "xdg-shell-protocol.h"
+
+/* libvncserver */
+#include <rfb/rfb.h>
+
+struct server {
+    struct wl_display *display;
+    struct wl_event_loop *event_loop;
+    struct wlr_backend *backend;
+    struct wlr_renderer *renderer;
+    struct wlr_scene *scene;
+    struct wlr_output_layout *layout;
+    struct wlr_xdg_shell *xdg_shell;
+    struct wl_listener new_xdg_surface;
+};
+
+/* --- XDG surface handling (kept from your original) --------------------- */
+static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
+    struct server *server = wl_container_of(listener, server, new_xdg_surface);
+    struct wlr_xdg_surface *xdg_surface = data;
+
+    /* attach new xdg surface to root scene tree */
+    struct wlr_scene_tree *root = &server->scene->tree;
+    wlr_scene_xdg_surface_create(root, xdg_surface);
+}
+
+/* --- VNC update placeholder: this is where rendered pixels must be copied
+       into rfb_screen->frameBuffer. For now we allocate and expose the
+       framebuffer so a client can connect. ------------------------------- */
+
+static rfbScreenInfoPtr vnc_screen = NULL;
+static int vnc_width = 1280;
+static int vnc_height = 720;
+
+/* Called from compositor output frame listeners when a new frame is ready.
+   You must implement copying the compositor pixels into vnc_screen->frameBuffer
+   here. The API for obtaining pixels depends on your render path (pixman,
+   GL readback, dmabuf). This function is left as a TODO hook. */
+static void update_vnc_framebuffer_from_wlroots(struct wlr_output *output) {
+    if (!vnc_screen || !vnc_screen->frameBuffer) return;
+
+    /* TODO:
+       - Acquire the output buffer (pixman image or GL readback)
+       - Convert/pack it into 32-bit ARGB or the pixel format expected by
+         libvncserver (usually 32-bit RGBA/ABGR depending on server
+         configuration).
+       - memcpy into vnc_screen->frameBuffer, then call:
+             rfbMarkRectAsModified(vnc_screen, 0, 0, vnc_width, vnc_height);
+       - The easiest initial approach: render something static into the
+         framebuffer to verify VNC connectivity, then implement live updates.
+    */
+
+    /* Example: zero the buffer (black screen) so VNC client sees something */
+    memset(vnc_screen->frameBuffer, 0x00, (size_t)vnc_width * vnc_height * 4);
+    rfbMarkRectAsModified(vnc_screen, 0, 0, vnc_width, vnc_height);
+}
+
+/* Optional: minimal output frame callback example (not wired here, left as
+   a reference if you attach per-output listeners) */
+static void output_frame_notify(struct wl_listener *listener, void *data) {
+    struct wlr_output *output = data;
+    /* On a real implementation you'd check damage and read pixels from output */
+    update_vnc_framebuffer_from_wlroots(output);
+}
+
+/* ------------------------------- main ---------------------------------- */
+int main(int argc, char *argv[]) {
+    wlr_log_init(WLR_DEBUG, NULL);
+
+    struct server server = {0};
+
+    /* ensure XDG_RUNTIME_DIR exists before starting (the runner should do this) */
+    const char *xdg = getenv("XDG_RUNTIME_DIR");
+    if (!xdg) {
+        fprintf(stderr, "warning: XDG_RUNTIME_DIR not set; setting a sane default\n");
+        setenv("XDG_RUNTIME_DIR", "/data/data/com.termux/files/usr/tmp/wayland", 1);
+    }
+
+    server.display = wl_display_create();
+    if (!server.display) {
+        fprintf(stderr, "Failed to create wl_display\n");
+        return EXIT_FAILURE;
+    }
+    server.event_loop = wl_display_get_event_loop(server.display);
+
+    /* create a headless backend (Termux-friendly) */
+    server.backend = wlr_headless_backend_create(server.event_loop);
+    if (!server.backend) {
+        wlr_log(WLR_ERROR, "Failed to create headless backend");
+        wl_display_destroy(server.display);
+        return EXIT_FAILURE;
+    }
+
+    /* create renderer chosen automatically (will pick pixman if GLES/EGL fails) */
+    server.renderer = wlr_renderer_autocreate(server.backend);
+    if (!server.renderer) {
+        wlr_log(WLR_ERROR, "Failed to create renderer");
+        wl_display_destroy(server.display);
+        return EXIT_FAILURE;
+    }
+
+    /* compositor and scene */
+    wlr_compositor_create(server.display, 6, server.renderer);
+    server.scene = wlr_scene_create();
+    server.layout = wlr_output_layout_create(server.display);
+
+    /* xdg shell (keep your existing functionality) */
+    server.xdg_shell = wlr_xdg_shell_create(server.display, 3);
+
+    /* create a headless output so clients have a screen to attach to */
+    struct wlr_output *headless_output = wlr_headless_add_output(server.backend, vnc_width, vnc_height);
+    if (!headless_output) {
+        wlr_log(WLR_ERROR, "Failed to create headless output");
+        wl_display_destroy(server.display);
+        return EXIT_FAILURE;
+    }
+    /* register it automatically in layout */
+    wlr_output_layout_add_auto(server.layout, headless_output);
+
+    /* connect xdg surface handler */
+    server.new_xdg_surface.notify = handle_new_xdg_suface;
+    wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_surface);
+
+    /* ------------------ VNC server initialization ----------------------- */
+    /* Use libvncserver to create a VNC server. We won't wire the compositor
+       pixel producer->consumer fully here (that's platform/render-path
+       dependent), but we will start a server and expose a framebuffer.
+    */
+
+    /* create the rfbScreen; rfbGetScreen takes argc/argv in many examples */
+    vnc_screen = rfbGetScreen(&argc, argv, vnc_width, vnc_height, 8, 3, 4);
+    if (!vnc_screen) {
+        fprintf(stderr, "Failed to create rfb screen\n");
+    } else {
+        /* allocate a framebuffer (32-bit, 4 bytes per pixel) */
+        size_t fb_size = (size_t)vnc_width * (size_t)vnc_height * 4;
+        vnc_screen->frameBuffer = calloc(1, fb_size);
+        if (!vnc_screen->frameBuffer) {
+            fprintf(stderr, "Failed to allocate VNC framebuffer\n");
+            /* allow to continue without VNC */
+        } else {
+            vnc_screen->desktopName = "termuxwc";
+            vnc_screen->port = 5900; /* standard VNC port; you can change */
+            /* set preferred pixel format: here we request 32-bit */
+            vnc_screen->serverFormat.redShift = 16;
+            vnc_screen->serverFormat.greenShift = 8;
+	    vnc_screen->serverFormat.blueShift = 0;
+	    vnc_screen->serverFormat.redMax = 255;
+	    vnc_screen->serverFormat.greenMax = 255;
+            vnc_screen->serverFormat.blueMax = 255;
+
+
+            /* initialize server (will listen on the chosen port) */
+            rfbInitServer(vnc_screen);
+
+            /* initial content so client sees something */
+            update_vnc_framebuffer_from_wlroots(headless_output);
+            wlr_log(WLR_INFO, "VNC server initialized on port %d", vnc_screen->port);
+        }
+    }
+
+    /* Add Wayland socket */
+    const char *socket = wl_display_add_socket_auto(server.display);
+    if (!socket) {
+        wlr_log(WLR_ERROR, "Failed to add Wayland socket");
+        if (vnc_screen && vnc_screen->frameBuffer) free(vnc_screen->frameBuffer);
+        wl_display_destroy(server.display);
+        return EXIT_FAILURE;
+    }
+
+    /* Start the backend (this starts headless output generation) */
+    if (!wlr_backend_start(server.backend)) {
+        wlr_log(WLR_ERROR, "Failed to start backend");
+        if (vnc_screen && vnc_screen->frameBuffer) free(vnc_screen->frameBuffer);
+        wl_display_destroy(server.display);
+        return EXIT_FAILURE;
+    }
+
+    wlr_log(WLR_INFO, "Running headless compositor on WAYLAND_DISPLAY=%s", socket);
+    if (vnc_screen) {
+        wlr_log(WLR_INFO, "VNC server listening on port %d", vnc_screen->port);
+    }
+
+    /* Run the wayland event loop (this blocks until exit) */
+    wl_display_run(server.display);
+
+    /* Cleanup */
+    if (vnc_screen) {
+        /* libvncserver cleanup: rfbScreenCleanup exists in the API */
+        rfbScreenCleanup(vnc_screen);
+        if (vnc_screen->frameBuffer) free(vnc_screen->frameBuffer);
+    }
+    wl_display_destroy(server.display);
+    return EXIT_SUCCESS;
+}
+

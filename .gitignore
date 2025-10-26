@@ -1,0 +1,15 @@
+# prebuikt things
+/build/
+/builddir/
+*.o
+*.a
+*.so
+*.log
+
+# temp files
+*.swp
+*.cache
+*.tmp
+
+# prefix
+/data/
