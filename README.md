@@ -1,4 +1,23 @@
 Termuxwc, Wayland compositor for Rootless devices.
+aarch64 GLES2 support. 
+Unintended Any gnu/linux device support. e.g= your e220s thinkpad that barely lives, running any linux. dont run void though, it doesnt have vulkan things.
+Vulkan support.
+Graphic accel support
+
+I am just starting to code, to port. i will probably have to edit wlroots by majority,
+theres huge integration missing in wlr/wlr_shm.c and wlr/wlr_renderer.c for devices like this.
+I need to patcch up a lot.
+The current build fails with call to undeclared function and no member named errors. 
+i will learn through it.. however. i will also rebuild this for pc in another completely unsketchy name for shits and giggles.
+
+
+steps to do:
+  1.fix shared memory
+  2.fix the src/main.c, add necessary placeholders //optimize
+  3.apply heavy patches to wlroots, e.g wlr/wlr_shm.c ~ 519 -> assert(hasasrgb... )
+  4.write needed headers and .c files
+  4.integrate shared memory workarounds
+  5.launch a terminal for gods sake.
 
 
 
@@ -6,5 +25,23 @@ Termuxwc, Wayland compositor for Rootless devices.
 
 
 
-github repository for my attempt for developing a wayland compositor for rootless android devices running termux. it only displays a black screen for now. pixman doesnt work, need to fix. u are free to contribute.
+
+
+
+
+
+im stuck in a debugging loop right now, sorry. im still fighting, pathing -> build error fixing. 
+
+
+
+
+
+
+
+
+
+
+
+github repository for my attempt for developing a wayland compositor. u are free to contribute. much love.
 # termuxwc
+
