@@ -1,13 +1,24 @@
 Termuxwc, Wayland compositor for Rootless devices.
 aarch64 GLES2 support. 
 Unintended Any gnu/linux device support. e.g= your e220s thinkpad that barely lives, running any linux. dont run void though, it doesnt have vulkan things.
+
+
 Vulkan support.
+
+
 Graphic accel support
 
+
+
 I am just starting to code, to port. i will probably have to edit wlroots by majority,
+
+
 theres huge integration missing in wlr/wlr_shm.c and wlr/wlr_renderer.c for devices like this.
+
 I need to patcch up a lot.
+
 The current build fails with call to undeclared function and no member named errors. 
+
 i will learn through it.. however. i will also rebuild this for pc in another completely unsketchy name for shits and giggles.
 
 
@@ -19,9 +30,8 @@ steps to do:
   4.integrate shared memory workarounds
   5.launch a terminal for gods sake.
 
-
-
-
+if u try to run on pc, gives: termuxwc: types/wlr_shm.c:517: wlr_shm_create: Assertion `has_argb8888 && has_xrgb8888' failed.
+on phone, it doesnt build for now. please wish me luck
 
 
 
