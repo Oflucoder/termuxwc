@@ -31,7 +31,20 @@ steps to do:
   5.launch a terminal for gods sake.
 
 if u try to run on pc, gives: termuxwc: types/wlr_shm.c:517: wlr_shm_create: Assertion `has_argb8888 && has_xrgb8888' failed.
-on phone, it doesnt build for now. please wish me luck
+on phone, the git version works but locally im having errors have fun. and please wish me luck
+
+Build tutorial (
+clone wlroots
+git clone https://gitlab.freedesktop.org/wlroots/wlroots.git
+
+
+
+
+
+
+
+im stuck in a debugging loop right now, sorry. im still fighting, pathing -> build error fixing. ❎ 
+fixed. trying diffrent workarounds to make the terminal apear.
 
 
 
@@ -40,18 +53,8 @@ on phone, it doesnt build for now. please wish me luck
 
 
 
-im stuck in a debugging loop right now, sorry. im still fighting, pathing -> build error fixing. 
 
 
-
-
-
-
-
-
-
-
-
-github repository for my attempt for developing a wayland compositor. u are free to contribute. much love.
+github repository for my attempt for developing a wayland compositor. u are free to contribute. much love <3
 # termuxwc
 
