@@ -6,16 +6,16 @@ Unintended Any gnu/linux device support. e.g= your e220s thinkpad that barely li
 Vulkan support.
 
 
-Graphic accel support
+Graphic accel support if u have root access or u are on pc :p 
 
 
 
-I am just starting to code, to port. i will probably have to edit wlroots by majority,
+I am just starting to code, to port. i will probably have to edit wlroots by majority. even, for the pc. its mmissing some stuff.
 
 
-theres huge integration missing in wlr/wlr_shm.c and wlr/wlr_renderer.c for devices like this.
+theres huge integration missing in wlr/wlr_shm.c and wlr/wlr_renderer.c, i need to apply patches. but every patch brings another ninja error.
 
-I need to patcch up a lot.
+I need to struggle lots
 
 The current build fails with call to undeclared function and no member named errors. 
 
