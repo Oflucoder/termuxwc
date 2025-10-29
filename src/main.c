@@ -262,6 +262,11 @@ int main(int argc, char *argv[]) {
     wlr_log_init(WLR_DEBUG, NULL); // Logların stderr'e gitmesini zorla
     setbuf(stdout, NULL); // stdout tamponlamasını kapat
     setbuf(stderr, NULL); // stderr tamponlamasını kapat
+    
+    // *** YENİ DÜZELTME: GLES2 (llvmpipe) sürücüsünü zorla ***
+    // 'virgl' çalışmadı, 'llvmpipe' (yazılım GLES2) deniyoruz.
+    // Bu, 'libEGL warning: egl: failed to create dri2 screen' hatasını çözmeli.
+    setenv("GALLIUM_DRIVER", "llvmpipe", 1);
     // --- Bitiş ---
 
     struct termuxwc_server server = {0};
@@ -311,10 +316,11 @@ int main(int argc, char *argv[]) {
     // Pencereleri tutacağımız listeyi başlat
     wl_list_init(&server.views);
 
-    // *** ÇÖKME DÜZELTMESİ: 'gles2' yerine 'pixman'e geri dön ***
-    // EGL/GLES2 sürücüleri Termux'ta başarısız oluyor.
-    setenv("WLR_RENDERER", "pixman", 1);
-    // setenv("WLR_RENDERER", "gles2", 1); // ESKİ SATIR
+    // *** YENİ DÜZELTME: GLES2'yi ZORUNLU KIL ***
+    // 'pixman' allocator hatası veriyor. Tek çözüm GLES2'yi 
+    // çalışması için gereken Termux paketlerini kurmaktır
+    // (örn: pkg install virglrenderer-android)
+    setenv("WLR_RENDERER", "gles2", 1);
 
     server.display = wl_display_create();
     if (!server.display) {
@@ -333,16 +339,22 @@ int main(int argc, char *argv[]) {
         goto fail_display;
     }
 
-    // Renderer (çizim motoru) - şimdi pixman'i deneyecek
+    // Renderer (çizim motoru) - şimdi GLES2'yi deneyecek
     server.renderer = wlr_renderer_autocreate(server.backend);
     if (!server.renderer) {
-        wlr_log(WLR_ERROR, "Failed to create renderer (pixman).");
+        // *** Log mesajı düzeltildi ***
+        wlr_log(WLR_ERROR, "Failed to create renderer (GLES2). 'virglrenderer-android' kurulu ve 'GALLIUM_DRIVER=llvmpipe' ayarlı mı?");
         goto fail_backend;
     }
 
-    // *** DÜZELTME (SATIR SIRASI): 'wlr_renderer_init_wl_display' buraya taşındı ***
-    // Renderer oluşturulduktan hemen sonra ve SHM'den önce.
-    wlr_renderer_init_wl_display(server.renderer, server.display);
+    // *** wlr_renderer_init_wl_display KALDIRILDI ***
+    // wlr_renderer_init_wl_display(server.renderer, server.display); // KALDIRILDI
+
+    // *** Sadece SHM'yi oluştur/bağla ***
+    // Bu, GLES2 renderer'ı için de gereklidir.
+    if (!wlr_shm_create_with_renderer(server.display, 1, server.renderer)) {
+        wlr_log(WLR_ERROR, "SHM creation failed");
+    }
 
 
     // Temel compositor bileşenleri
@@ -373,15 +385,9 @@ int main(int argc, char *argv[]) {
         goto fail_seat;
     }
 
-    // SHM (Paylaşımlı Hafıza)
-    // *** DÜZELTME: 'wlr_shm_create_with_renderer' ÇAĞRISI GERİ EKLENDİ ***
-    // 'already registered' logu önemli değil. Bu çağrı, 
-    // allocator'ü düzgün bir şekilde başlatmak için GEREKLİ.
-    if (!wlr_shm_create_with_renderer(server.display, 1, server.renderer)) {
-        wlr_log(WLR_ERROR, "SHM creation failed");
-    }
-
-    // *** 'wlr_renderer_init_wl_display' çağrısı buradan KALDIRILDI (yukarı taşındı) ***
+    // *** 'wlr_shm_create_with_renderer' çağrısı yukarı taşındı ***
+    
+    // *** 'wlr_renderer_init_wl_display' çağrısı KALDIRILDI ***
 
 
     // XDG-Shell (pencereleri yönetmek için)
@@ -560,5 +566,6 @@ fail_display:
     if (server.display) wl_display_destroy(server.display);
     return 1;
 }
+
 
 
