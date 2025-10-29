@@ -15,7 +15,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <wayland-server-core.h>
-
+#include <wlr/types/wlr_subcompositor.h>
 #include <wlr/backend.h>
 #include <wlr/backend/headless.h>
 #include <wlr/render/wlr_renderer.h>
@@ -58,6 +58,10 @@ static int start_vnc_server(struct termuxwc_server *server, int width, int heigh
         return -1;
     }
 
+    // Critical for Termux/Android
+    rfb->inetdSock = -1;
+    rfb->inetdInitDone = FALSE;
+
     rfb->frameBuffer = calloc((size_t)width * (size_t)height * 4, 1);
     if (!rfb->frameBuffer) {
         wlr_log(WLR_ERROR, "Failed to allocate VNC framebuffer");
@@ -92,12 +96,20 @@ static int start_vnc_server(struct termuxwc_server *server, int width, int heigh
 
 // Test pattern for VNC (since real rendering not possible in wlroots 0.20)
 static void update_vnc_test_pattern(rfbScreenInfoPtr vnc) {
-    if (!vnc || !vnc->frameBuffer) return;
+    if (!vnc || !vnc->frameBuffer) {
+        wlr_log(WLR_ERROR, "VNC framebuffer null");
+        return;
+    }
+    wlr_log(WLR_DEBUG, "Updating VNC test pattern");
     int w = vnc->width, h = vnc->height;
     uint32_t *fb = (uint32_t *)vnc->frameBuffer;
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-            fb[y * w + x] = (x % 256) << 16 | (y % 256) << 8 | 0xFF;
+            uint8_t r = x % 256;
+            uint8_t g = y % 256;
+            uint8_t b = 128;
+            // VNC expects 0xRRGGBB00 in 32-bit
+            fb[y * w + x] = (r << 16) | (g << 8) | b;
         }
     }
     rfbMarkRectAsModified(vnc, 0, 0, w, h);
@@ -182,7 +194,11 @@ int main(int argc, char *argv[]) {
         wlr_log(WLR_ERROR, "Failed to create compositor");
         goto fail_renderer;
     }
+    
 
+    // ➤ ADD THIS: Required for subsurfaces (menus, cursors, etc.)
+    wlr_subcompositor_create(server.display); 
+   
     // Create SHM with fallback formats (critical for terminals)
     const uint32_t fallback_formats[] = { 0x34325258, 0x34325241 }; // XRGB, ARGB
     if (!wlr_shm_create(server.display, 1, fallback_formats, 2)) {
@@ -247,6 +263,9 @@ int main(int argc, char *argv[]) {
 
     // Start VNC update timer
     wl_event_loop_add_timer(server.event_loop, vnc_timer_callback, server.vnc);
+
+    // Force initial VNC update
+    update_vnc_test_pattern(server.vnc);
 
     wlr_log(WLR_INFO, "TermuxWC running. Connect via VNC to port 5900.");
     wl_display_run(server.display);
