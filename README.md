@@ -50,7 +50,7 @@ fixed. trying diffrent workarounds to make the terminal apear.
 
 
 
-
+... only x works. wayland gives renderer and memory errors. im sorry but i will not develop this anymore.
 
 
 
