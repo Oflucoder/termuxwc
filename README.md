@@ -50,7 +50,7 @@ fixed. trying diffrent workarounds to make the terminal apear.
 
 
 
-... only x works. wayland gives renderer and memory errors. im sorry but i will not develop this anymore.
+... only x works. wayland gives renderer and memory errors.. its irrecoverable. i will look back into this. for now i willl make a x11 based one instead. i will return dont worry 
 
 
 
