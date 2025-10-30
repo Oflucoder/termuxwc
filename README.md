@@ -23,17 +23,18 @@ i will learn through it.. however. i will also rebuild this for pc in another co
 
 
 steps to do:
-  1.fix shared memory
-  2.fix the src/main.c, add necessary placeholders //optimize
-  3.apply heavy patches to wlroots, e.g wlr/wlr_shm.c ~ 519 -> assert(hasasrgb... )
-  4.write needed headers and .c files
-  4.integrate shared memory workarounds
-  5.launch a terminal for gods sake.
+  1.fix shared memory ➕
+  2.fix the src/main.c, add necessary placeholders //optimize done   
+  3.apply heavy patches to wlroots, e.g wlr/wlr_shm.c ~ 519 -> assert(hasasrgb... ) done
+  4.write needed headers and .c files done
+  4.integrate shared memory workarounds NOT DONE. (x11 works for funny reasons)
+  5.launch a terminal for gods sake. (did xterm with Xvfb)
 
 if u try to run on pc, gives: termuxwc: types/wlr_shm.c:517: wlr_shm_create: Assertion `has_argb8888 && has_xrgb8888' failed.
-on phone, the git version works but locally im having errors have fun. and please wish me luck
-
+on phone, the git version works but locally im having errors have fun. and please wish me luck ❎
+it works. but pixman+wayland works. just.. any app. it wont work. 
 Build tutorial (
+(tutorial will come. please wait.)
 clone wlroots
 git clone https://gitlab.freedesktop.org/wlroots/wlroots.git
 
