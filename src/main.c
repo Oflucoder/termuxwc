@@ -1,20 +1,22 @@
 /*
- * termuxwc: wlroots-0.20-dev tabanlı, 'wayvnc' gibi istemcilerle
- * çalışan basit bir Termux Wayland compositor'ü.
+ * termuxwc: wlroots-0.19.1 tabanlı, neatvnc ile çalışan
+ * basit bir Termux Wayland compositor'ü.
+ * BU SÜRÜM: Saf Wayland. Xvfb/Xvnc/xterm KULLANMAZ.
  */
 
 #define _POSIX_C_SOURCE 200809L
-#include <limits.h> // For PATH_MAX
-#include <sys/stat.h> // For stat(), mkdir()
-#include <sys/wait.h> // For waitpid(), WNOHANG
-#include <errno.h>    // For errno
-#include <unistd.h>   // For usleep(), forkpty()
-#include <pty.h>      // For forkpty()
-#include <termios.h>  // For cfmakeraw(), tcgetattr()
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <pty.h>
+#include <termios.h>
+#include <sys/stat.h>
+#include <sys/types.h> // access() için
+#include <errno.h>
 #include <signal.h> // For kill()
+#include <sys/wait.h> // For waitpid()
 
 #include <wayland-server-core.h>
 #include <wayland-util.h> // wl_list için
@@ -25,10 +27,9 @@
 #include <wlr/backend.h>
 #include <wlr/backend/headless.h>
 #include <wlr/render/wlr_renderer.h>
-#include <wlr/render/pass.h> // wlroots-0.20-dev'de wlr_render_pass için
+#include <wlr/render/pass.h> // wlroots-0.19.1'de wlr_render_pass için
 
 // wlroots protokolleri
-// #include <wlr/types/wlr_allocator.h> // *** KALDIRILDI: Bu dosya sisteminizde yok ***
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_shm.h>
@@ -38,11 +39,11 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_surface.h>
-// wayvnc gibi VNC istemcileri için gerekli protokoller
+// neatvnc için gerekli protokoller (doğrudan screencopy)
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
 #include <wlr/types/wlr_virtual_pointer_v1.h>
-#include <wlr/util/matrix.h> 
+#include <wlr/util/matrix.h> // Potentially needed if using matrix functions later, though not directly used in the new pass API for surfaces
 
 struct termuxwc_server;
 
@@ -64,7 +65,6 @@ struct termuxwc_server {
 
     struct wlr_backend *backend;
     struct wlr_renderer *renderer;
-    // struct wlr_allocator *allocator; // *** KALDIRILDI ***
     struct wlr_compositor *compositor;
     struct wlr_output_layout *output_layout;
     struct wlr_output *output; // Headless VNC çıktımız
@@ -80,8 +80,7 @@ struct termuxwc_server {
 };
 
 // VNC'ye bağlanan istemci için terminal (foot) başlatan fonksiyon
-// Updated signature to take socket name and xdg_runtime_dir explicitly
-static pid_t launch_pty_terminal(const char *socket_name, const char *xdg_runtime_dir) {
+static pid_t launch_pty_terminal(const char *socket, const char *xdg_runtime) {
     struct termios termios;
     pid_t pid;
     int master;
@@ -95,9 +94,8 @@ static pid_t launch_pty_terminal(const char *socket_name, const char *xdg_runtim
     pid = forkpty(&master, NULL, &termios, NULL);
     if (pid == 0) {
         // Çocuk process
-        // Set environment variables for the child process
-        setenv("WAYLAND_DISPLAY", socket_name, 1); // Use the socket name provided
-        setenv("XDG_RUNTIME_DIR", xdg_runtime_dir, 1); // Use the verified runtime dir provided
+        setenv("WAYLAND_DISPLAY", socket, 1);
+        setenv("XDG_RUNTIME_DIR", xdg_runtime, 1); // 'xg_runtime' hatası düzeltildi
         setenv("TERM", "xterm-256color", 1);
         setenv("COLORTERM", "truecolor", 1);
 
@@ -112,7 +110,7 @@ static pid_t launch_pty_terminal(const char *socket_name, const char *xdg_runtim
 }
 
 //
-// DÜZELTİLMİŞ RENDER DÖNGÜSÜ (wlroots-0.20-dev API - wlr_render_pass kullanarak)
+// DÜZELTİLMİŞ RENDER DÖNGÜSÜ (wlroots-0.19.1 API - wlr_render_pass kullanarak)
 //
 static void handle_output_frame(struct wl_listener *listener, void *data) {
     (void)data; // Suppress unused warning
@@ -181,21 +179,23 @@ static void handle_output_frame(struct wl_listener *listener, void *data) {
     bool submit_ok = wlr_render_pass_submit(pass);
     if (!submit_ok) {
         wlr_log(WLR_ERROR, "Failed to submit render pass");
+        // Even if submit failed, we should still schedule the next frame.
+        // However, sending present after a *failed* submit might be incorrect or meaningless.
+        // It's safer not to send present if the pass failed.
         wlr_output_schedule_frame(output);
         return;
     }
 
     // 🔑 CRITICAL: Tell wlroots the frame was presented for screencopy
-    // Populate the present event structure.
-    //
-    // *** DERLEYİCİ HATASI DÜZELTMESİ: ***
-    // Derleyici .when alanının 'time_t' (long) olmasını bekliyor, 'struct timespec *' değil.
-    //
+    // Populate the present event structure. Using the time captured before the pass is common.
     struct wlr_output_event_present present_event = {
-        .when = now.tv_sec, // 'time_t' (saniye) değeri
-        .seq = 0,
-        .flags = WLR_OUTPUT_PRESENT_VSYNC, 
+        .when = { .tv_sec = now.tv_sec, .tv_nsec = now.tv_nsec }, // Use the full timespec, wrapped in braces { }
+        .seq = 0, // Often set by backend or optional
+        .flags = WLR_OUTPUT_PRESENT_VSYNC, // Indicate VSync (or similar timing event), common default
+        // Omit other potentially non-existent or backend-specific fields
     };
+    // Note: Depending on the backend and version, other fields might be needed or automatically filled.
+    // The 'when' field (or its equivalent value) is often key.
 
     wlr_output_send_present(output, &present_event);
     wlr_log(WLR_DEBUG, "Sent present event for screencopy.");
@@ -219,7 +219,9 @@ static void handle_view_commit(struct wl_listener *listener, void *data) {
     }
 
     wlr_log(WLR_DEBUG, "Commit received for surface %p", (void*)view->xdg_surface->surface);
-}
+}// Kapanış parantezi eklendi
+
+
 
 // Bir pencere (view) kapandığında çağrılır
 static void handle_view_destroy(struct wl_listener *listener, void *data) {
@@ -228,6 +230,13 @@ static void handle_view_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&view->link);
     free(view);
 }
+
+//
+// DÜZELTME: 'configure' işlemini 'map' yerine 'commit' sinyalinde yap
+//
+// Yüzey (pencere) 'commit' yaptığında (içeriğini güncellediğinde) çağrılır
+// Kapanış parantezi eklendi
+
 
 // Yeni bir pencere (foot) açıldığında çağrılır
 static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
@@ -249,6 +258,38 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
     wl_signal_add(&xdg_surface->surface->events.commit, &view->commit);
     wlr_log(WLR_INFO, "New XDG surface created: %p", (void*)xdg_surface);
 }
+// --- START neatvnc (using the built png-server example) ---
+static pid_t start_neatvnc(const char *socket, const char *xdg_runtime_dir) {
+    wlr_log(WLR_INFO, "Starting neatvnc (png-server example)...");
+    pid_t neatvnc_pid = fork();
+    if (neatvnc_pid == 0) {
+        // Child process: exec the built neatvnc example server (png-server)
+        setenv("WAYLAND_DISPLAY", socket, 1);
+        setenv("XDG_RUNTIME_DIR", xdg_runtime_dir, 1);
+        // Command: ./build/examples/png-server -o :0 -p 5999 -l 0.0.0.0
+        // NOTE: Using -SecurityTypes None is INSECURE. Configure a password in production.
+        // NOTE: The arguments might differ slightly for png-server. Check its source or help.
+        // Common arguments for neatvnc examples: -o (output/display), -p (port), -l (listen address)
+        execl("./neatvnc/build/examples/png-server", "png-server",
+              "./wallpaper.jpeg"
+              "-o", ":0", // Capture output 0 of the compositor (might need adjustment)
+              "-p", "5999", // VNC port
+              "-l", "0.0.0.0", // Listen on all interfaces (INSECURE, use 127.0.0.1 in production)
+              
+              // "-SecurityTypes", "None", // Check if png-server supports this or uses a different method
+              (char *)NULL);
+        perror("neatvnc (png-server) exec failed");
+        _exit(1);
+    } else if (neatvnc_pid < 0) {
+        wlr_log(WLR_ERROR, "Failed to fork for neatvnc (png-server)");
+        return -1;
+    } else {
+        wlr_log(WLR_INFO, "neatvnc (png-server) started (PID %d) on port 5999", neatvnc_pid);
+        return neatvnc_pid;
+    }
+}
+// --- END neatvnc ---
+
 
 
 // Ana fonksiyon
@@ -256,71 +297,13 @@ int main(int argc, char *argv[]) {
     (void)argc; // Kullanılmayan parametre uyarısını sustur
     (void)argv;
 
-    // --- Gelişmiş Loglama ve Tampon Kapatma ---
-    // Logların WAYLAND_DEBUG=1 ile bile görünmesini sağlamak için
-    setenv("WLR_LOG_LEVEL", "DEBUG", 1);
-    wlr_log_init(WLR_DEBUG, NULL); // Logların stderr'e gitmesini zorla
-    setbuf(stdout, NULL); // stdout tamponlamasını kapat
-    setbuf(stderr, NULL); // stderr tamponlamasını kapat
-    
-    // *** YENİ DÜZELTME: GLES2 (llvmpipe) sürücüsünü zorla ***
-    // 'virgl' çalışmadı, 'llvmpipe' (yazılım GLES2) deniyoruz.
-    // Bu, 'libEGL warning: egl: failed to create dri2 screen' hatasını çözmeli.
-    setenv("GALLIUM_DRIVER", "llvmpipe", 1);
-    // --- Bitiş ---
-
     struct termuxwc_server server = {0};
-
-    // --- SET UP ENVIRONMENT EARLY ---
-    // *** DÜZELTME: ***
-    // `mkdir` komutunun "No such file or directory" hatasını düzeltmek için
-    // önce üst dizini (.../tmp) oluşturmayı deneyeceğiz.
-    char xdg_runtime_dir_path[PATH_MAX];
-    char tmp_path[PATH_MAX]; // Üst dizin için
-    const char *prefix = getenv("PREFIX");
-    if (!prefix) {
-        prefix = "/data/data/com.termux/files/usr"; // Default Termux prefix
-    }
-    
-    // Path 1: Üst dizin (.../tmp)
-    snprintf(tmp_path, sizeof(tmp_path), "%s/tmp", prefix);
-    
-    // Path 2: Asıl dizin (.../tmp/termuxwc_runtime)
-    snprintf(xdg_runtime_dir_path, sizeof(xdg_runtime_dir_path), "%s/tmp/termuxwc_runtime", prefix);
-
-    // Adım 1: Üst dizini oluşturmayı dene
-    if (mkdir(tmp_path, 0700) != 0 && errno != EEXIST) {
-         // Başarısız olursa logla, ama yine de devam etmeyi dene
-         // *** HATA DÜZELTMESİ: WLR_WARN -> WLR_INFO ***
-         wlr_log(WLR_INFO, "Could not create parent runtime dir %s: %s. Continuing anyway...", tmp_path, strerror(errno));
-    } else {
-         wlr_log(WLR_DEBUG, "Ensured parent runtime dir exists: %s", tmp_path);
-    }
-
-    // Adım 2: Asıl dizini oluşturmayı dene
-    if (mkdir(xdg_runtime_dir_path, 0700) != 0 && errno != EEXIST) {
-         // Bu, kullanıcının gördüğü hataydı (ENOENT)
-         wlr_log(WLR_ERROR, "Failed to create XDG_RUNTIME_DIR %s: %s", xdg_runtime_dir_path, strerror(errno));
-         // Bu daha ciddi bir sorun, ancak devam etmeyi deneyeceğiz.
-    } else {
-         wlr_log(WLR_INFO, "Ensured XDG_RUNTIME_DIR exists: %s", xdg_runtime_dir_path);
-    }
-    
-    // Değişkeni bu process ve tüm alt process'ler (fork/exec) için ayarla.
-    setenv("XDG_RUNTIME_DIR", xdg_runtime_dir_path, 1); 
-    const char *final_xdg_runtime_dir = xdg_runtime_dir_path;
-    wlr_log(WLR_INFO, "Forcing XDG_RUNTIME_DIR to: %s", final_xdg_runtime_dir);
-    // --- Önceki XDG_RUNTIME_DIR mantığı değiştirildi ---
-
 
     // Pencereleri tutacağımız listeyi başlat
     wl_list_init(&server.views);
 
-    // *** YENİ DÜZELTME: GLES2'yi ZORUNLU KIL ***
-    // 'pixman' allocator hatası veriyor. Tek çözüm GLES2'yi 
-    // çalışması için gereken Termux paketlerini kurmaktır
-    // (örn: pkg install virglrenderer-android)
-    setenv("WLR_RENDERER", "gles2", 1);
+    // pixman renderer'ı zorunlu kıl (Termux'ta OpenGL/Vulkan zor olabilir)
+    setenv("WLR_RENDERER", "pixman", 1);
 
     server.display = wl_display_create();
     if (!server.display) {
@@ -339,23 +322,12 @@ int main(int argc, char *argv[]) {
         goto fail_display;
     }
 
-    // Renderer (çizim motoru) - şimdi GLES2'yi deneyecek
+    // Renderer (çizim motoru)
     server.renderer = wlr_renderer_autocreate(server.backend);
     if (!server.renderer) {
-        // *** Log mesajı düzeltildi ***
-        wlr_log(WLR_ERROR, "Failed to create renderer (GLES2). 'virglrenderer-android' kurulu ve 'GALLIUM_DRIVER=llvmpipe' ayarlı mı?");
+        wlr_log(WLR_ERROR, "Failed to create renderer");
         goto fail_backend;
     }
-
-    // *** wlr_renderer_init_wl_display KALDIRILDI ***
-    // wlr_renderer_init_wl_display(server.renderer, server.display); // KALDIRILDI
-
-    // *** Sadece SHM'yi oluştur/bağla ***
-    // Bu, GLES2 renderer'ı için de gereklidir.
-    if (!wlr_shm_create_with_renderer(server.display, 1, server.renderer)) {
-        wlr_log(WLR_ERROR, "SHM creation failed");
-    }
-
 
     // Temel compositor bileşenleri
     server.compositor = wlr_compositor_create(server.display, 5, server.renderer);
@@ -366,7 +338,7 @@ int main(int argc, char *argv[]) {
     wlr_subcompositor_create(server.display);
     wlr_data_device_manager_create(server.display);
 
-    // Girdi (Seat) ve wayvnc için sanal protokoller
+    // Girdi (Seat) ve neatvnc için sanal protokoller
     server.seat = wlr_seat_create(server.display, "seat0");
     if (!server.seat) {
         wlr_log(WLR_ERROR, "Failed to create seat");
@@ -380,15 +352,16 @@ int main(int argc, char *argv[]) {
         wlr_log(WLR_ERROR, "Failed to create virtual pointer manager");
         goto fail_seat;
     }
-    if (!wlr_screencopy_manager_v1_create(server.display)) {
+    if (!wlr_screencopy_manager_v1_create(server.display)) { // CRITICAL for neatvnc
         wlr_log(WLR_ERROR, "Failed to create screencopy manager");
         goto fail_seat;
     }
 
-    // *** 'wlr_shm_create_with_renderer' çağrısı yukarı taşındı ***
-    
-    // *** 'wlr_renderer_init_wl_display' çağrısı KALDIRILDI ***
-
+    // SHM (Paylaşımlı Hafıza)
+    const uint32_t fallback_formats[] = { 0x34325258, 0x34325241 }; // XRGB, ARGB
+    if (!wlr_shm_create(server.display, 1, fallback_formats, 2)) {
+        wlr_log(WLR_ERROR, "SHM creation failed");
+    }
 
     // XDG-Shell (pencereleri yönetmek için)
     server.xdg_shell = wlr_xdg_shell_create(server.display, 3);
@@ -419,29 +392,7 @@ int main(int argc, char *argv[]) {
         wlr_log(WLR_ERROR, "Failed to create headless output");
         goto fail_layout;
     }
-    server.output->name = "VNC-1"; // wayvnc'nin bulabilmesi için bir isim ver
-
-    // *** YENİ DÜZELTME (wlroots-0.20-dev API): Çıktıyı "State" API'si ile etkinleştir ***
-    // wayvnc'nin "failed()" hatası vermemesi için bu gerekli.
-    struct wlr_output_state state;
-    wlr_output_state_init(&state); // Boş state'i başlat
-    
-    // State üzerine özel modu ayarla
-    wlr_output_state_set_custom_mode(&state, width, height, 0); // Genişlik, yükseklik, hz (0=varsayılan)
-    
-    // State üzerine etkinleştirme durumunu ayarla
-    wlr_output_state_set_enabled(&state, true);
-
-    // Yeni state'i çıktıya atomik olarak uygula
-    if (!wlr_output_commit_state(server.output, &state)) {
-         wlr_log(WLR_ERROR, "Failed to commit headless output state");
-         wlr_output_state_finish(&state); // Başarısız olsa bile state'i temizle
-         goto fail_layout;
-    }
-    
-    // Başarılı commit'ten sonra state'i temizle
-    wlr_output_state_finish(&state);
-    // *** DÜZELTME SONU ***
+    server.output->name = "VNC-1";
 
     // Render döngüsü için 'frame' sinyalini dinle
     server.output_frame.notify = handle_output_frame;
@@ -452,85 +403,44 @@ int main(int argc, char *argv[]) {
     // Başlangıçta bir kare çiz
     wlr_output_schedule_frame(server.output);
 
-    // Wayland soketini oluştur (this MUST happen AFTER display creation)
-    const char *socket_name = wl_display_add_socket_auto(server.display);
-    if (!socket_name) {
+    // Wayland soketini oluştur
+    const char *socket = wl_display_add_socket_auto(server.display);
+    if (!socket) {
         wlr_log(WLR_ERROR, "Failed to create Wayland socket");
-        
-        // *** DÜZELTME (Crash Koruması): ***
-        // Soket oluşturma başarısız olursa, çıkış (output) 
-        // 'frame' dinleyicisini (listener) goto fail_layout'a gitmeden
-        // önce manuel olarak kaldırmalıyız.
-        // Yoksa wlr_backend_destroy() -> wlr_output_finish() 
-        // içinde assertion failure hatası alırız.
-        wl_list_remove(&server.output_frame.link);
-
-        goto fail_layout; // Şimdi atlamak güvenli
+        goto fail_layout;
     }
-    // Set WAYLAND_DISPLAY environment variable for child processes (like foot)
-    setenv("WAYLAND_DISPLAY", socket_name, 1);
-    wlr_log(WLR_INFO, "WAYLAND_DISPLAY=%s", socket_name);
-    wlr_log(WLR_INFO, "WAYLAND_DISPLAY=%s (Full path likely $XDG_RUNTIME_DIR/%s)", socket_name, socket_name);
+    setenv("WAYLAND_DISPLAY", socket, 1);
+    wlr_log(WLR_INFO, "WAYLAND_DISPLAY=%s", socket);
 
-    // --- PID Değişkenlerini Başlat ---
-    pid_t xwayland_pid = 0;
-    pid_t term_pid = 0;
-    pid_t wayvnc_pid = 0; // wayvnc'yi takip etmek için PID eklendi
+    // XDG_RUNTIME_DIR (Termux için ayarla)
+    const char *xdg = getenv("XDG_RUNTIME_DIR");
+    if (!xdg) {
+        xdg = "/data/data/com.termux/files/usr/tmp/wayland";
+        setenv("XDG_RUNTIME_DIR", xdg, 1);
+        mkdir(xdg, 0700);
+    }
 
-    // --- TÜM HATALI Xvfb / Xvnc / xterm BAŞLATMA MANTIĞI KALDIRILDI ---
-    // Bu mantık hem hatalıydı (display çakışması) hem de 
-    // Wayland compositor'ün amacına uygun değildi.
-    // VNC sunucusu (wayvnc) ayrı bir istemci olarak çalıştırılmalıdır.
-
-
-    // --- Start xwayland ---
-    wlr_log(WLR_INFO, "Starting xwayland...");
-    xwayland_pid = fork();
-    if (xwayland_pid == 0) {
-        // Child process: exec xwayland
-        setenv("WAYLAND_DISPLAY", socket_name, 1); // Use the socket name from wl_display_add_socket_auto
-        setenv("XDG_RUNTIME_DIR", final_xdg_runtime_dir, 1); // Use the verified XDG_RUNTIME_DIR
-        execl("/data/data/com.termux/files/usr/bin/Xwayland", "Xwayland", "-rootless", "-listen", "tcp", "-core", (char *)NULL);
-        perror("Xwayland exec failed");
-        _exit(1);
-    } else if (xwayland_pid < 0) {
-        wlr_log(WLR_ERROR, "Failed to fork for Xwayland");
-        // Continue without Xwayland, only Wayland apps will work inside the compositor
+    // --- START neatvnc ---
+     pid_t neatvnc_pid = start_neatvnc(socket, xdg);
+    if (neatvnc_pid < 0) {
+        wlr_log(WLR_ERROR, "Failed to start neatvnc (png-server)");
+        // This is not fatal, the compositor will still run, just no VNC access
     } else {
-        wlr_log(WLR_INFO, "Xwayland started (PID %d) on its own display (e.g., :1000)", xwayland_pid);
+        wlr_log(WLR_INFO, "Launched neatvnc (png-server) (PID %d)", neatvnc_pid);
     }
-    sleep(1); // Give Xwayland a moment to start
-
-
-    // Terminali (foot) başlat
-    // Use the verified socket name and XDG_RUNTIME_DIR
-    term_pid = launch_pty_terminal(socket_name, final_xdg_runtime_dir);
+    // --- START neatvnc (using the built png-server example) ---
+    
+ // --- END neatvnc --- 
+    //term 
+      // --- START TERMINAL ---
+    // Launch a Wayland terminal (e.g., foot) inside the compositor
+    pid_t term_pid = launch_pty_terminal(socket, xdg); // Use the socket and xdg_runtime_dir from main
     if (term_pid < 0) {
         wlr_log(WLR_ERROR, "Failed to launch terminal");
     } else {
         wlr_log(WLR_INFO, "Launched terminal (PID %d)", term_pid);
     }
-
-    // --- wayvnc'yi otomatik başlat ---
-    wlr_log(WLR_INFO, "Starting wayvnc...");
-    wayvnc_pid = fork();
-    if (wayvnc_pid == 0) {
-        // Çocuk process: exec wayvnc
-        // WAYLAND_DISPLAY ve XDG_RUNTIME_DIR zaten ebeveynden miras alınır.
-        execl("/data/data/com.termux/files/usr/bin/wayvnc", "wayvnc", "0.0.0.0", (char *)NULL);
-        perror("wayvnc exec failed");
-        _exit(1);
-    } else if (wayvnc_pid < 0) {
-        wlr_log(WLR_ERROR, "Failed to fork for wayvnc");
-        // Ölümcül değil, compositor VNC olmadan çalışmaya devam eder
-    } else {
-        wlr_log(WLR_INFO, "wayvnc started (PID %d). VNC available on 0.0.0.0:5900", wayvnc_pid);
-    }
-
-
-    wlr_log(WLR_INFO, "TermuxWC running. VNC should be available on port 5900.");
-
-
+    // --- END START TERMINAL ---
     // Olay döngüsünü çalıştır
     wl_display_run(server.display);
 
@@ -538,19 +448,23 @@ int main(int argc, char *argv[]) {
     // Cleanup (Hata ayıklama etiketleri)
     //
     // Kill child processes on exit if necessary
-    if (xwayland_pid > 0) { 
-        wlr_log(WLR_INFO, "Terminating Xwayland (PID %d)...", xwayland_pid);
-        kill(xwayland_pid, SIGTERM);
+    if (neatvnc_pid > 0) {
+        wlr_log(WLR_INFO, "Terminating neatvnc (PID %d)...", neatvnc_pid);
+        kill(neatvnc_pid, SIGTERM);
+        int status;
+        waitpid(neatvnc_pid, &status, 0);
+        wlr_log(WLR_INFO, "neatvnc (PID %d) terminated.", neatvnc_pid);
     }
+    
+    
     if (term_pid > 0) {
         wlr_log(WLR_INFO, "Terminating terminal (PID %d)...", term_pid);
         kill(term_pid, SIGTERM);
+        int status;
+        waitpid(term_pid, &status, 0);
+        wlr_log(WLR_INFO, "Terminal (PID %d) terminated.", term_pid);
     }
-    if (wayvnc_pid > 0) { 
-        wlr_log(WLR_INFO, "Terminating wayvnc (PID %d)...", wayvnc_pid);
-        kill(wayvnc_pid, SIGTERM);
-    }
-
+    
 fail_seat:
     if (server.seat) wlr_seat_destroy(server.seat);
 fail_layout:
@@ -558,7 +472,6 @@ fail_layout:
 fail_xdg:
 fail_compositor:
 fail_renderer:
-    // *** 'wlr_allocator_destroy' çağrısı buradan KALDIRILDI ***
     if (server.renderer) wlr_renderer_destroy(server.renderer);
 fail_backend:
     if (server.backend) wlr_backend_destroy(server.backend);
@@ -566,6 +479,3 @@ fail_display:
     if (server.display) wl_display_destroy(server.display);
     return 1;
 }
-
-
-
