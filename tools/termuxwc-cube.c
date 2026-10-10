@@ -126,13 +126,13 @@ static const GLfloat cube_vertices[] = {
 
 static void multiply_matrix(float out[16], const float a[16], const float b[16]) {
     float res[16];
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            res[i * 4 + j] = 
-                a[i * 4 + 0] * b[0 * 4 + j] +
-                a[i * 4 + 1] * b[1 * 4 + j] +
-                a[i * 4 + 2] * b[2 * 4 + j] +
-                a[i * 4 + 3] * b[3 * 4 + j];
+    for (int col = 0; col < 4; col++) {
+        for (int row = 0; row < 4; row++) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                sum += a[k * 4 + row] * b[col * 4 + k];
+            }
+            res[col * 4 + row] = sum;
         }
     }
     memcpy(out, res, sizeof(res));
@@ -155,18 +155,22 @@ static void perspective_matrix(float m[16], float fov_rad, float aspect, float n
 
 static void rotate_x_matrix(float m[16], float rad) {
     identity_matrix(m);
-    m[5] = cosf(rad);
-    m[6] = -sinf(rad);
-    m[9] = sinf(rad);
-    m[10] = cosf(rad);
+    float c = cosf(rad);
+    float s = sinf(rad);
+    m[5] = c;
+    m[6] = s;
+    m[9] = -s;
+    m[10] = c;
 }
 
 static void rotate_y_matrix(float m[16], float rad) {
     identity_matrix(m);
-    m[0] = cosf(rad);
-    m[2] = sinf(rad);
-    m[8] = -sinf(rad);
-    m[10] = cosf(rad);
+    float c = cosf(rad);
+    float s = sinf(rad);
+    m[0] = c;
+    m[2] = -s;
+    m[8] = s;
+    m[10] = c;
 }
 
 static void translate_matrix(float m[16], float x, float y, float z) {
@@ -182,16 +186,16 @@ static void render_frame(struct app *app) {
     glViewport(0, 0, app->width, app->height);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    float proj[16], trans[16], rot_x[16], rot_y[16], model[16], mvp[16];
-    float aspect = (float)app->width / (float)app->height;
+    float proj[16], trans[16], rot_x[16], rot_y[16], rot[16], model[16], mvp[16];
+    float aspect = (float)app->width / (float)(app->height > 0 ? app->height : 1);
     perspective_matrix(proj, 45.0f * (M_PI / 180.0f), aspect, 0.1f, 100.0f);
 
-    translate_matrix(trans, 0.0f, 0.0f, -2.5f);
+    translate_matrix(trans, 0.0f, 0.0f, -3.0f);
     rotate_x_matrix(rot_x, app->angle_x);
     rotate_y_matrix(rot_y, app->angle_y);
 
-    multiply_matrix(model, rot_x, rot_y);
-    multiply_matrix(model, trans, model);
+    multiply_matrix(rot, rot_x, rot_y);
+    multiply_matrix(model, trans, rot);
     multiply_matrix(mvp, proj, model);
 
     glUniformMatrix4fv(app->u_mvp, 1, GL_FALSE, mvp);
@@ -336,6 +340,7 @@ int main(int argc, char *argv[]) {
     }
 
     // EGL Setup
+    setenv("EGL_LOG_LEVEL", "fatal", 0);
     app.egl_display = eglGetDisplay((EGLNativeDisplayType)app.display);
     if (app.egl_display == EGL_NO_DISPLAY) {
         fprintf(stderr, "Error: eglGetDisplay failed\n");
@@ -436,7 +441,9 @@ int main(int argc, char *argv[]) {
     glVertexAttribPointer(app.a_color, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(GLfloat), (void *)(3 * sizeof(GLfloat)));
 
     glEnable(GL_DEPTH_TEST);
-    glClearColor(0.08f, 0.08f, 0.12f, 1.0f); // Dark theme matching termuxwc
+    glDepthFunc(GL_LEQUAL);
+    glDisable(GL_CULL_FACE);
+    glClearColor(0.12f, 0.14f, 0.20f, 1.0f);
 
     wl_surface_commit(app.surface);
 
