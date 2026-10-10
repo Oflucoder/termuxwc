@@ -13,3 +13,10 @@
 
 # prefix
 /data/
+
+# external subprojects & scratch
+/aml/
+/neatvnc/
+/wpaperd/
+/starttermuxwc.sh
+wallpaper.*

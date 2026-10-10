@@ -1,27 +1,23 @@
-project('termuxwc', 'c', version: '0.3', default_options: ['warning_level=2', 'c_std=c11']
-)
+project('termuxwc', 'c', version: '0.4', default_options: ['warning_level=2', 'c_std=c11'])
 
 add_project_arguments('-DWLR_USE_UNSTABLE', language: 'c')
 
-# Sistemdeki eksik wlroots kurulumuna hâlâ ihtiyacımız var
+cc = meson.get_compiler('c')
 wlroots_dep = dependency('wlroots-0.19', version: '>=0.19.0', required: true)
 wayland_server_dep = dependency('wayland-server', required: true)
-vnc_dep = dependency('libvncserver', required: true)
+xkbcommon_dep = dependency('xkbcommon', required: true)
+pixman_dep = dependency('pixman-1', required: true)
 
-# Kendi manuel eklediğimiz header'ları bulması için
-local_include = include_directories('./include')
-local_protocols_inc = include_directories('./include/protocols')
+local_include = include_directories('include')
+protocols_inc = include_directories('include/protocols')
 
 executable('termuxwc',
   [
-    'src/main.c', 
+    'src/main.c',
     'include/protocols/xdg-shell-protocol.c',
-    'src/matrix.c'  # <-- EKSİK C KODUNU BURADA DERLİYORUZ
+    'include/protocols/wlr-layer-shell-unstable-v1-protocol.c'
   ],
-  dependencies: [wlroots_dep, wayland_server_dep, vnc_dep],
-  
-  # <-- HEADER DOSYASINI BURADA BULUYOR
-  include_directories: [local_protocols_inc, local_include], 
-  
+  include_directories: [local_include, protocols_inc],
+  dependencies: [wlroots_dep, wayland_server_dep, xkbcommon_dep, pixman_dep],
   install: true,
 )
