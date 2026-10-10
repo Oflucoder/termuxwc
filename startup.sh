@@ -120,6 +120,10 @@ else
     VULKAN_DRIVER="System Default"
 fi
 
+# Multi-threaded CPU rasterization optimization (uses all CPU cores)
+export LP_NUM_THREADS="${LP_NUM_THREADS:-8}"
+export VIRGL_CLIENT_DIR="/data/data/com.termux/files/usr/tmp"
+
 # --- Step 3: Ensure compositor binary is up to date ---
 echo "Checking compositor binary..."
 ninja -C build &>/dev/null || true
@@ -183,7 +187,9 @@ WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
 GALLIUM_DRIVER="$GALLIUM_DRIVER" \
 MESA_GL_VERSION_OVERRIDE="$MESA_GL_VERSION_OVERRIDE" \
 MESA_GLSL_VERSION_OVERRIDE="$MESA_GLSL_VERSION_OVERRIDE" \
+VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR" \
 VK_ICD_FILENAMES="$VK_ICD_FILENAMES" \
+LP_NUM_THREADS="$LP_NUM_THREADS" \
     foot &> "$FOOT_LOG" &
 FOOT_PID=$!
 
