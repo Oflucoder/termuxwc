@@ -1447,7 +1447,13 @@ static void setup_xdg_runtime_dir(void) {
 }
 
 int main(int argc, char *argv[]) {
-	wlr_log_init(WLR_DEBUG, NULL);
+	const char *log_env = getenv("WLR_LOG_LEVEL");
+	enum wlr_log_importance log_level = WLR_ERROR;
+	if (log_env) {
+		if (strcmp(log_env, "debug") == 0) log_level = WLR_DEBUG;
+		else if (strcmp(log_env, "info") == 0) log_level = WLR_INFO;
+	}
+	wlr_log_init(log_level, NULL);
 
 	struct termuxwc_server server = {0};
 	server.default_width = 1280;
@@ -1584,6 +1590,7 @@ int main(int argc, char *argv[]) {
 
 	// Output layout & Scene graph
 	server.output_layout = wlr_output_layout_create(server.wl_display);
+	setenv("WLR_SCENE_DISABLE_DIRECT_SCANOUT", "1", 0);
 	server.scene = wlr_scene_create();
 	server.scene_layout = wlr_scene_attach_output_layout(
 		server.scene, server.output_layout);
