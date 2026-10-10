@@ -1,72 +1,124 @@
-# termuxwc: SwayWM-Grade Tiling Wayland Compositor for Termux
+<div align="center">
 
-A native, high-performance **SwayWM-grade tiling Wayland compositor** built from scratch with **wlroots-0.19**, tailored specifically for **rootless Android (Termux)** and Linux mobile environments.
+# termuxwc
 
-`termuxwc` brings the full power, workflow, and aesthetics of a modern tiling window manager (dynamic master-stack tiling, 9 virtual workspaces, inner/outer gaps, active/inactive window borders, and Sway keybindings) directly to your Android device without requiring root privileges or hardware GPU acceleration, streaming over ultra-low-latency VNC via `wayvnc`.
+**A lightweight, high-performance tiling Wayland compositor built from scratch with wlroots for rootless Android (Termux).**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20Linux%20(aarch64)-green.svg)](https://termux.dev)
+[![wlroots](https://img.shields.io/badge/wlroots-0.19.1-orange.svg)](https://gitlab.freedesktop.org/wlroots/wlroots)
+[![Wayland](https://img.shields.io/badge/Protocol-Wayland-red.svg)](https://wayland.freedesktop.org)
+
+[Quickstart](#quick-start) •
+[Features](#features) •
+[Keybindings](#keybindings) •
+[Configuration](#configuration) •
+[GPU Acceleration](#hardware-gpu-acceleration) •
+[Build from Source](#building-from-source)
+
+</div>
 
 ---
 
-## Key Features
+## Overview
 
-- **Rootless & 100% Native**: Runs entirely inside Termux userspace with no proot overhead, no root access, and no kernel modifications required.
-- **Dynamic Auto-Tiling Engine**:
-  - Master-stack tiling that automatically adapts to your phone or tablet orientation.
-  - **Landscape Mode**: Splits master on the left with vertical stacks on the right.
-  - **Portrait Mode**: Splits master on top with horizontal stacks on the bottom (ideal for one-handed mobile usage).
+`termuxwc` brings a complete, SwayWM-grade tiling desktop experience to mobile devices. It runs natively within Termux userspace without requiring root privileges, custom kernels, or `proot` containers. 
+
+Designed specifically for touchscreens and mobile workflows, `termuxwc` pairs dynamic master-stack tiling with low-latency remote desktop streaming via `wayvnc`, allowing you to use your Android phone or tablet as a complete Linux productivity workstation.
+
+---
+
+## Quick Start
+
+### Automatic Installation (Recommended)
+
+Run the one-line installer inside Termux:
+
+```bash
+curl -sL https://raw.githubusercontent.com/Oflucoder/termuxwc/main/install.sh | bash
+```
+
+The installer automatically:
+1. Installs all required Termux dependencies (`wayvnc`, `foot`, `virglrenderer-android`, `pixman`, `libxkbcommon`).
+2. Deploys the precompiled, Android-patched `libwlroots-0.19.so` and `termuxwc` binaries.
+3. Generates the default configuration file (`~/.config/termuxwc/config`).
+4. Adds the global `termuxwc-session` command to your path.
+
+### Launching the Desktop
+
+Start the desktop session:
+
+```bash
+termuxwc-session
+```
+
+Then connect any VNC viewer:
+* **On your phone**: [AVNC](https://github.com/gstansev/AVNC) (recommended) or [bVNC](https://github.com/bk138/multivnc) to `127.0.0.1:5900`
+* **From a PC on the same Wi-Fi network**: `<phone-ip>:5900`
+
+To shut down the session cleanly, press `Ctrl + C` in the Termux terminal.
+
+---
+
+## Features
+
+- **Native & Rootless**: Runs directly inside Termux with no chroot or proot overhead.
+- **Dynamic Mobile Tiling**:
+  - Master-stack layout that automatically adapts to device orientation.
+  - **Landscape**: Master window on the left, vertical stack on the right.
+  - **Portrait**: Master window on top, horizontal stack below for single-hand mobile use.
 - **9 Virtual Workspaces**:
-  - Instant workspace switching (`Mod + 1..9`).
-  - Move individual windows between workspaces (`Mod + Shift + 1..9`).
-  - Isolated scene graphs per workspace so hidden windows consume zero rendering overhead.
-- **Modern Aesthetics & Gaps**:
-  - Configurable inner and outer gaps (`inner_gap`, `outer_gap`).
-  - Custom border width and colors for active and inactive windows (`active_border`, `inactive_border`).
-  - Custom wallpaper / solid background color canvas.
-- **Full SwayWM Keybinding Suite**:
-  - Familiar i3 / Sway shortcuts (`Mod+Return`, `Mod+Q`, `Mod+F`, `Mod+Space`, `Mod+H/J/K/L`, `Mod+1..9`, `Mod+Shift+E`).
-  - **Mobile Mod Key Support (`ModBoth`)**: Allows **Alt** and **Super/Windows** keys to work interchangeably out of the box—essential for Android on-screen keyboards (such as Gboard or Hacker's Keyboard) which rarely have a physical Super key.
-- **Extensible Configuration System**:
-  - Simple, human-readable config at `~/.config/termuxwc/config`.
-  - Automatically generated with sleek defaults on first launch.
-- **Desktop Protocol Support**:
-  - **XDG-Shell** (`xdg_wm_base`): Modern application window lifecycle, interactive moves and resizes, fullscreen and floating toggles.
-  - **Layer-Shell** (`zwlr_layer_shell_v1`): Support for status bars (`waybar`), wallpapers (`swaybg`, `wpaperd`), and desktop notifications.
-  - **Virtual Input**: Full integration with `wlr-virtual-keyboard-v1` and `wlr-virtual-pointer-v1` for remote keyboard and pointer streaming.
-  - **Screencopy**: Protocol support for `wayvnc` streaming and `grim` screenshots.
-- **Universal GPU Hardware Acceleration Subsystem**:
-  - Automatically identifies any mobile GPU architecture:
-    - **Qualcomm Snapdragon** (Adreno 5xx, 6xx, 7xx, 8xx via `/dev/kgsl-3d0`)
-    - **ARM Mali** (Samsung Exynos, MediaTek Dimensity/Helio, Google Tensor, HiSilicon Kirin via `/dev/mali*`)
-    - **PowerVR / Rogue** (Unisoc, Rockchip via `/dev/pvr*`)
-    - **Samsung / AMD Xclipse** (RDNA2/RDNA3)
-    - **Linux Direct DRM Nodes** (`/dev/dri/renderD128`)
-  - Integrated VirGL hardware 3D bridge (`virgl_test_server_android --multi-clients`) offloads OpenGL/GLES calls directly to the host physical GPU (`GALLIUM_DRIVER=virpipe`).
-  - Pluggable compositor rendering (`-R auto|gles2|vulkan|pixman`) with automatic, graceful Pixman fallback.
+  - Independent workspaces (`Mod + 1..9`) with zero background rendering overhead for inactive workspaces.
+  - Instant window migration (`Mod + Shift + 1..9`).
+- **Universal Mobile GPU Acceleration**:
+  - Auto-detects physical GPU hardware: Qualcomm Adreno (`/dev/kgsl-3d0`), ARM Mali (`/dev/mali0`), PowerVR, Samsung Xclipse, and direct Linux DRM nodes.
+  - Routes 3D OpenGL and GLES calls to the physical host GPU via a built-in VirGL bridge (`GALLIUM_DRIVER=virpipe`).
+- **Customizable Theming & Aesthetics**:
+  - Active and inactive window border outlines rendered via `wlr_scene_rect`.
+  - Configurable inner and outer gaps.
+- **Mobile-Friendly Mod Key (`ModBoth`)**:
+  - Allows **Alt** and **Super (Windows)** keys to work interchangeably, enabling full keybinding support on mobile virtual keyboards (e.g. Hacker's Keyboard, Gboard).
+- **Modern Wayland Protocol Support**:
+  - **XDG-Shell** (`xdg_wm_base`): Window management, moving, resizing, fullscreen, and floating states.
+  - **Layer-Shell** (`zwlr_layer_shell_v1`): Wallpapers (`swaybg`, `wpaperd`) and status bars (`waybar`).
+  - **Virtual Input**: Full input pass-through for remote VNC keyboard and touch pointers.
+  - **Screencopy**: Low-latency desktop capture via `zwlr_screencopy_manager_v1`.
 
 ---
 
-## Technical Challenges Solved
+## Keybindings
 
-### 1. Android Bionic Shared Memory (`shm_open`)
-* **Problem**: Android's Bionic C library does not implement POSIX `shm_open()` (returns `ENOSYS`). In upstream wlroots, `util/shm.c` fails when allocating shared memory file pairs (`allocate_shm_file_pair`), preventing keymaps from reaching client applications. This caused clients like `foot` to immediately terminate with `Broken pipe`.
-* **Solution**: Patched `wlroots/util/shm.c` to use `mkostemp()` inside `$XDG_RUNTIME_DIR` or `/tmp` to create temporary file descriptors that work reliably across rootless Android processes.
+Default modifier: **`Mod`** (configured to accept either `Super` or `Alt`).
 
-### 2. VNC Virtual Input Event Routing
-* **Problem**: `wayvnc` injects remote touch/mouse clicks and keystrokes using the `wlr-virtual-keyboard-v1` and `wlr-virtual-pointer-v1` protocols. These do not pass through the backend's standard hardware input signal, causing the terminal to ignore all keyboard typing and mouse clicks.
-* **Solution**: Wired up `wlr_virtual_keyboard_manager_v1` and `wlr_virtual_pointer_manager_v1` listeners, attaching virtual pointers to `wlr_cursor` and virtual keyboards to `wlr_seat`, routing keyboard enter events directly to active windows.
+| Shortcut | Action | Description |
+| :--- | :--- | :--- |
+| **`Mod + Return`** | Launch Terminal | Opens `foot` terminal with GPU acceleration |
+| **`Mod + D`** | App Launcher | Spawns configured menu / application launcher |
+| **`Mod + Q`** | Close Window | Closes currently focused window |
+| **`Mod + F`** | Fullscreen | Toggles fullscreen mode for active window |
+| **`Mod + Space`** | Toggle Floating | Switches window between tiling and floating state |
+| **`Mod + H`** / **`Left`** | Focus Left / Previous | Navigates focus to previous window |
+| **`Mod + L`** / **`Right`** | Focus Right / Next | Navigates focus to next window |
+| **`Mod + J`** / **`Down`** | Focus Down | Moves focus downwards in stack |
+| **`Mod + K`** / **`Up`** | Focus Up | Moves focus upwards in stack |
+| **`Mod + Shift + H/J/K/L`** | Swap Window | Reorders focused window position in tiling stack |
+| **`Mod + 1` .. **`Mod + 9`** | Switch Workspace | Switches to workspace 1–9 |
+| **`Mod + Shift + 1..9`** | Move to Workspace | Sends active window to workspace 1–9 |
+| **`Mod + Shift + E`** | Exit Compositor | Shuts down `termuxwc` session cleanly |
+| **`Mod + Left Drag`** | Move Floating | Drags a floating window |
+| **`Mod + Right Drag`** | Resize Floating | Resizes a floating window |
+| **`Left Click`** | Focus Window | Raises and focuses clicked window |
 
 ---
 
-## Configuration (`~/.config/termuxwc/config`)
+## Configuration
 
-On first launch, `termuxwc` automatically creates `~/.config/termuxwc/config` if it does not already exist:
+Configuration is located at `~/.config/termuxwc/config` and created automatically on first run:
 
 ```ini
-# termuxwc Sway-grade Tiling Window Manager Configuration
+# termuxwc Configuration
 
-# Modifier key:
-# Mod4    = Super / Windows key
-# Mod1    = Alt key
-# ModBoth = Both Alt and Super work interchangeably (Recommended for mobile)
+# Modifier key: Mod4 (Super), Mod1 (Alt), or ModBoth (Both Alt & Super)
 mod ModBoth
 
 # Default applications
@@ -78,7 +130,7 @@ inner_gap 6
 outer_gap 8
 border_width 2
 
-# Colors (Hex format #rrggbb)
+# Colors (Hex format: #RRGGBB)
 active_border #7aa2f7
 inactive_border #3b4261
 background #16161e
@@ -86,51 +138,62 @@ background #16161e
 
 ---
 
-## Keybindings Reference
+## Hardware GPU Acceleration
 
-| Shortcut | Action | Description |
+`termuxwc` includes a built-in hardware acceleration supervisor in `startup.sh` that detects your hardware on startup:
+
+```
+[ Termux GUI Applications / Games / Video Players ]
+                       │
+             (GALLIUM_DRIVER=virpipe)
+                       ▼
+            virgl_test_server_android
+                       ▼
+             Android Vendor GLES Driver
+                       ▼
+       Physical GPU (Adreno / Mali / PowerVR)
+```
+
+| GPU Architecture | Node / Detection | Driver Stack |
 | :--- | :--- | :--- |
-| **`Mod + Return`** | Launch Terminal | Opens configured terminal (`foot`) |
-| **`Mod + D`** | App Launcher | Opens configured application menu / launcher |
-| **`Mod + Q`** | Close Window | Sends close request to currently focused window |
-| **`Mod + F`** | Toggle Fullscreen | Expands active window across entire usable screen |
-| **`Mod + Space`** | Toggle Floating | Switches window between tiling tree and floating state |
-| **`Mod + H`** / **`Left`** | Focus Left / Prev | Moves focus to the previous tiled window |
-| **`Mod + L`** / **`Right`** | Focus Right / Next | Moves focus to the next tiled window |
-| **`Mod + J`** / **`Down`** | Focus Down | Moves focus downwards in stacking layout |
-| **`Mod + K`** / **`Up`** | Focus Up | Moves focus upwards in stacking layout |
-| **`Mod + Shift + H/J/K/L`** | Swap Window | Reorders focused window position within tiling layout |
-| **`Mod + 1` .. **`Mod + 9`** | Switch Workspace | Switches active display to workspace 1 through 9 |
-| **`Mod + Shift + 1..9`** | Move to Workspace | Sends focused window to specified workspace |
-| **`Mod + Shift + E`** | Exit Compositor | Cleanly shuts down `termuxwc` session |
-| **`Mod + Left Drag`** | Move Floating | Interactively drags a floating window |
-| **`Mod + Right Drag`** | Resize Floating | Interactively resizes a floating window |
-| **`Left Click`** | Focus Window | Clicks to focus and brings window to foreground |
+| **Qualcomm Adreno** | `/dev/kgsl-3d0` | Host Vendor GLES via VirGL / Turnip + Zink |
+| **ARM Mali** | `/dev/mali0` | Host Vendor GLES (`libGLES_mali.so`) via VirGL |
+| **PowerVR / Rogue** | `/dev/pvr_sync` | Host Vendor GLES (`libGLES_pvr.so`) via VirGL |
+| **Samsung Xclipse** | `/dev/dri/renderD128` | Host AMD GLES via VirGL |
+| **Linux Direct DRM** | `/dev/dri/renderD128` | Direct Mesa DRM / GBM pass-through |
+| **Fallback** | Generic CPU | Multi-threaded Mesa `llvmpipe` |
 
-> [!TIP]
-> With `mod ModBoth`, both the **Alt** key and **Super (Windows)** key function as the `Mod` key!
+To run any application with GPU acceleration manually:
+```bash
+GALLIUM_DRIVER=virpipe <application>
+```
 
 ---
 
-## Installation & Setup
+## Building from Source
 
-### 1. Install Dependencies in Termux
+If you prefer to compile `termuxwc` manually:
+
+### 1. Install Dependencies
 
 ```bash
 pkg update
 pkg install clang meson ninja pkg-config libwayland wayland-protocols \
-            libxkbcommon libpixman wayvnc foot
+            libxkbcommon libpixman wayvnc foot virglrenderer-android
 ```
 
-### 2. Patch & Install wlroots 0.19.1
+### 2. Patch & Build wlroots 0.19.1
 
-If compiling wlroots from source:
+> [!NOTE]
+> Android's Bionic C library lacks POSIX `shm_open()`. Upstream wlroots fails without patching `util/shm.c` to use `mkostemp()` in `$XDG_RUNTIME_DIR`.
+
 ```bash
 git clone https://gitlab.freedesktop.org/wlroots/wlroots.git -b 0.19.1
 cd wlroots
 ```
 
-In `util/shm.c`, update `allocate_shm_file_pair` for Android:
+In `util/shm.c`, replace `allocate_shm_file_pair` with an Android `mkostemp` implementation:
+
 ```c
 #ifdef __ANDROID__
 #include <stdlib.h>
@@ -152,12 +215,11 @@ meson setup build --prefix="$PREFIX" -Dexamples=false
 ninja -C build install
 ```
 
-### 3. Build & Install termuxwc
+### 3. Build termuxwc
 
 ```bash
-git clone https://github.com/yourusername/termuxwc.git
+git clone https://github.com/Oflucoder/termuxwc.git
 cd termuxwc
-
 meson setup build --prefix="$PREFIX"
 ninja -C build
 ninja -C build install
@@ -165,81 +227,22 @@ ninja -C build install
 
 ---
 
-## Running the Desktop Session
+## Command-Line Reference
 
-### Method 1: Automated Session Supervisor (Recommended)
-
-Simply execute:
-
-```bash
-./startup.sh
+```
+Usage: termuxwc [-s <cmd>] [-w <width>] [-h <height>] [-H] [-R <renderer>]
 ```
 
-`startup.sh` automatically:
-1. Reaps any stale sockets or zombie processes (`termuxwc`, `wayvnc`, `foot`).
-2. Re-compiles `termuxwc` if any changes exist.
-3. Spawns `termuxwc` in headless mode (default 1280x720).
-4. Launches `wayvnc` on `0.0.0.0:5900`.
-5. Spawns the `foot` terminal inside the Wayland session.
-
-To terminate the entire desktop session cleanly, press `Ctrl + C`.
-
-### Method 2: Manual Startup
-
-```bash
-export XDG_RUNTIME_DIR="/data/data/com.termux/files/usr/tmp/xdg-runtime"
-mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
-
-# Launch termuxwc with custom resolution and startup terminal
-termuxwc -w 1920 -h 1080 -s foot
-```
-
-#### Command-Line Arguments:
-| Flag | Description | Default |
+| Option | Description | Default |
 | :--- | :--- | :--- |
+| `-s <cmd>` | Startup command executed once compositor is ready | `None` |
 | `-w <width>` | Virtual display width in pixels | `1280` |
 | `-h <height>` | Virtual display height in pixels | `720` |
-| `-s <command>` | Initial command to spawn on startup | `None` |
-| `-H` | Force headless backend mode | Auto |
+| `-H` | Force headless backend mode | Auto-detect |
 | `-R <renderer>` | Compositor renderer (`auto`, `gles2`, `vulkan`, `pixman`) | `auto` |
-
----
-
-## Connecting via VNC
-
-Once `termuxwc` and `wayvnc` are running:
-
-1. Open your VNC client:
-   - **Android Device**: [AVNC](https://github.com/gstansev/AVNC) (highly recommended for touch & pointer controls) or [bVNC](https://github.com/bk138/multivnc).
-   - **External PC**: TigerVNC, RealVNC Viewer, or Remmina.
-2. Enter connection details:
-   - **Local Phone**: `127.0.0.1:5900`
-   - **Over Wi-Fi / LAN**: `<phone-ip>:5900`
-3. Hit Connect (no password required). You will see your tiled Sway desktop ready for multitasking!
-
----
-
-## Project Structure
-
-```
-termuxwc/
-├── include/
-│   ├── protocols/        # Generated Wayland server protocol headers & sources
-│   │   ├── wlr-layer-shell-unstable-v1-protocol.h
-│   │   ├── wlr-layer-shell-unstable-v1-protocol.c
-│   │   ├── xdg-shell-protocol.h
-│   │   └── xdg-shell-protocol.c
-│   └── termuxwc/
-│       └── server.h      # Core structs: workspaces, config, toplevels, scene trees
-├── src/
-│   └── main.c           # Dynamic auto-tiling WM engine, Sway keybindings & event loops
-├── meson.build          # Meson build file with pixman, xkbcommon, wlroots dependencies
-├── startup.sh           # Session launcher & process manager
-└── README.md            # Comprehensive documentation
-```
 
 ---
 
 ## License
 
-MIT License. Feel free to use, modify, and contribute back!
+This project is licensed under the [MIT License](LICENSE).

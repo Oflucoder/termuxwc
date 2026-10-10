@@ -21,3 +21,4 @@
 /starttermuxwc.sh
 wallpaper.*
 __pycache__/
+dist/termuxwc-v0.4-aarch64/

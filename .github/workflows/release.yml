@@ -1,0 +1,30 @@
+name: Release Build & Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '0.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: "termuxwc Release ${{ github.ref_name }}"
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            install.sh
+            dist/termuxwc-v0.4-aarch64.tar.gz
