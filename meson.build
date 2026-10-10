@@ -31,3 +31,19 @@ executable('termuxwc',
   dependencies: [wlroots_dep, wayland_server_dep, xkbcommon_dep, pixman_dep],
   install: true,
 )
+
+wayland_client_dep = dependency('wayland-client', required: true)
+wayland_egl_dep = dependency('wayland-egl', required: true)
+egl_dep = dependency('egl', required: true)
+glesv2_dep = dependency('glesv2', required: true)
+m_dep = cc.find_library('m', required: false)
+
+executable('termuxwc-cube',
+  [
+    'tools/termuxwc-cube.c',
+    'include/protocols/xdg-shell-protocol.c'
+  ],
+  include_directories: [local_include, protocols_inc],
+  dependencies: [wayland_client_dep, wayland_egl_dep, egl_dep, glesv2_dep, m_dep],
+  install: true,
+)

@@ -1047,6 +1047,7 @@ static void output_frame(struct wl_listener *listener, void *data) {
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(scene_output, &now);
+	wl_display_flush_clients(output->server->wl_display);
 }
 
 static void output_request_state(struct wl_listener *listener, void *data) {
@@ -1063,10 +1064,52 @@ static void output_request_state(struct wl_listener *listener, void *data) {
 	arrange_all_workspaces(output->server);
 }
 
+static int output_frame_timer_handler(void *data) {
+	struct termuxwc_output *output = data;
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+
+	struct wlr_scene *scene = output->server->scene;
+	struct wlr_scene_output *scene_output =
+		wlr_scene_get_scene_output(scene, output->wlr_output);
+	if (scene_output) {
+		if (wlr_scene_output_needs_frame(scene_output)) {
+			wlr_scene_output_commit(scene_output, NULL);
+		}
+		wlr_scene_output_send_frame_done(scene_output, &now);
+	}
+
+	// Signal frame done for active toplevel surfaces
+	if (output->server->active_workspace >= 1 &&
+	    output->server->active_workspace <= NUM_WORKSPACES) {
+		struct termuxwc_workspace *ws =
+			&output->server->workspaces[output->server->active_workspace - 1];
+		struct termuxwc_toplevel *top;
+		wl_list_for_each(top, &ws->toplevels, link) {
+			if (top->xdg_toplevel && top->xdg_toplevel->base &&
+			    top->xdg_toplevel->base->surface) {
+				wlr_surface_send_frame_done(top->xdg_toplevel->base->surface, &now);
+			}
+		}
+	}
+
+	wl_display_flush_clients(output->server->wl_display);
+
+	int hz = output->server->default_refresh_rate > 0 ? output->server->default_refresh_rate / 1000 : 120;
+	if (hz < 30) hz = 30;
+	int interval_ms = 1000 / hz;
+	if (interval_ms < 1) interval_ms = 8;
+	wl_event_source_timer_update(output->frame_timer, interval_ms);
+	return 0;
+}
+
 static void output_destroy(struct wl_listener *listener, void *data) {
 	struct termuxwc_output *output =
 		wl_container_of(listener, output, destroy);
 	(void)data;
+	if (output->frame_timer) {
+		wl_event_source_remove(output->frame_timer);
+	}
 	wl_list_remove(&output->frame.link);
 	wl_list_remove(&output->request_state.link);
 	wl_list_remove(&output->destroy.link);
@@ -1112,6 +1155,14 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	wl_signal_add(&wlr_output->events.request_state, &output->request_state);
 	output->destroy.notify = output_destroy;
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
+
+	int hz = server->default_refresh_rate > 0 ? server->default_refresh_rate / 1000 : 120;
+	if (hz < 30) hz = 30;
+	int interval_ms = 1000 / hz;
+	if (interval_ms < 1) interval_ms = 8;
+	output->frame_timer = wl_event_loop_add_timer(server->event_loop,
+		output_frame_timer_handler, output);
+	wl_event_source_timer_update(output->frame_timer, interval_ms);
 
 	wl_list_insert(&server->outputs, &output->link);
 

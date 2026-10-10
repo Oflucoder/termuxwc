@@ -93,17 +93,23 @@ if [ "$GPU_TYPE" = "ARM Mali" ]; then
 fi
 echo ""
 
-# 5. Live 3D Benchmark (if display available)
-if [ -n "$DISPLAY" ] && xdpyinfo -display "$DISPLAY" &>/dev/null && command -v glxgears &>/dev/null; then
+# 5. Live 3D Benchmark (Native Wayland GPU)
+if [ -n "$WAYLAND_DISPLAY" ] && [ -x "$(command -v termuxwc-cube)" ]; then
+    echo "[5] Running Live 4-Second Wayland GPU Benchmark (termuxwc-cube)..."
+    BENCH_RESULT=$(GALLIUM_DRIVER="$GALLIUM_DRIVER" VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR" \
+        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+        timeout 5 termuxwc-cube 2>&1 | tr '\r' '\n' | grep -i "Running on GPU" | tail -n 1 || true)
+    if [ -n "$BENCH_RESULT" ]; then
+        echo "    $BENCH_RESULT"
+    else
+        echo "    >> 3D GPU Benchmark completed successfully."
+    fi
+elif [ -n "$DISPLAY" ] && xdpyinfo -display "$DISPLAY" &>/dev/null && command -v glxgears &>/dev/null; then
     echo "[5] Running Live 5-Second 3D Benchmark (glxgears)..."
     BENCH_RESULT=$(GALLIUM_DRIVER="$GALLIUM_DRIVER" VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR" DISPLAY="$DISPLAY" timeout 6 glxgears 2>&1 | grep -i "frames in" || true)
     if [ -n "$BENCH_RESULT" ]; then
         echo "    >> Benchmark Result: $BENCH_RESULT"
-    else
-        echo "    >> Benchmark completed."
     fi
-elif [ -n "$WAYLAND_DISPLAY" ]; then
-    echo "[5] Desktop compositor active on $WAYLAND_DISPLAY."
 fi
 
 echo ""

@@ -50,14 +50,23 @@ fi
 chmod 755 "$PREFIX/lib/libwlroots-0.19.so" 2>/dev/null || true
 chmod 755 "$PREFIX/bin/termuxwc" 2>/dev/null || true
 
-# 3. Deploy session supervisor script (termuxwc-session)
-echo ">> Step 3/4: Setting up session supervisor command (termuxwc-session)..."
+# 3. Deploy session supervisor script (termuxwc-session) and GPU diagnostic tools
+echo ">> Step 3/4: Setting up session supervisor and GPU tools..."
 if [ -f "$SCRIPT_DIR/startup.sh" ]; then
     cp -f "$SCRIPT_DIR/startup.sh" "$PREFIX/bin/termuxwc-session"
 elif [ -f "$SCRIPT_DIR/dist/termuxwc-v0.4-aarch64/startup.sh" ]; then
     cp -f "$SCRIPT_DIR/dist/termuxwc-v0.4-aarch64/startup.sh" "$PREFIX/bin/termuxwc-session"
 fi
 chmod 755 "$PREFIX/bin/termuxwc-session"
+
+if [ -f "$SCRIPT_DIR/bin/termuxwc-gpu-check" ]; then
+    cp -f "$SCRIPT_DIR/bin/termuxwc-gpu-check" "$PREFIX/bin/termuxwc-gpu-check"
+    chmod 755 "$PREFIX/bin/termuxwc-gpu-check"
+fi
+if [ -f "$SCRIPT_DIR/build/termuxwc-cube" ]; then
+    cp -f "$SCRIPT_DIR/build/termuxwc-cube" "$PREFIX/bin/termuxwc-cube"
+    chmod 755 "$PREFIX/bin/termuxwc-cube"
+fi
 
 # 4. Deploy default config
 echo ">> Step 4/4: Initializing configuration (~/.config/termuxwc/config)..."

@@ -148,56 +148,67 @@ background #16161e
              (GALLIUM_DRIVER=virpipe)
                        ▼
             virgl_test_server_android
+                       │
+       ┌───────────────┴───────────────┐
+       ▼                               ▼
+ [ ARM Mali GPUs ]              [ Other Mobile GPUs ]
+ ANGLE over Android Host        Android Vendor GLES
+ Vulkan 1.3 (Mali-G68)          Driver (Adreno / PowerVR)
+       │                               │
+       └───────────────┬───────────────┘
                        ▼
-             Android Vendor GLES Driver
-                       ▼
-       Physical GPU (Adreno / Mali / PowerVR)
+        Physical GPU Silicon Hardware
 ```
 
-| GPU Architecture | Node / Detection | OpenGL Acceleration | Vulkan Driver |
+| GPU Architecture | Node / Detection | OpenGL ES Acceleration | Vulkan Driver |
 | :--- | :--- | :--- | :--- |
-| **Qualcomm Adreno** | `/dev/kgsl-3d0` | Host GLES via VirGL / Zink | Turnip (`mesa-vulkan-icd-freedreno`) Direct Hardware |
-| **ARM Mali** | `/dev/mali0` | Host GLES (`libGLES_mali.so`) via VirGL | Lavapipe (`mesa-vulkan-icd-swrast`) Vulkan 1.4 |
-| **PowerVR / Rogue** | `/dev/pvr_sync` | Host GLES (`libGLES_pvr.so`) via VirGL | Lavapipe (`mesa-vulkan-icd-swrast`) Vulkan 1.4 |
-| **Samsung Xclipse** | `/dev/dri/renderD128` | Host AMD GLES via VirGL | Lavapipe (`mesa-vulkan-icd-swrast`) Vulkan 1.4 |
+| **Qualcomm Adreno** | `/dev/kgsl-3d0` | Host GLES via VirGL | Turnip (`mesa-vulkan-icd-freedreno`) Direct Hardware |
+| **ARM Mali** | `/dev/mali0` | Host Vulkan via VirGL + ANGLE | Lavapipe (`mesa-vulkan-icd-swrast`) Multi-threaded CPU |
+| **PowerVR / Rogue** | `/dev/pvr_sync` | Host GLES via VirGL | Lavapipe (`mesa-vulkan-icd-swrast`) Multi-threaded CPU |
+| **Samsung Xclipse** | `/dev/dri/renderD128` | Host AMD GLES via VirGL | Lavapipe (`mesa-vulkan-icd-swrast`) Multi-threaded CPU |
 | **Linux Direct DRM** | `/dev/dri/renderD128` | Direct Mesa DRM / GBM | Direct Mesa Vulkan ICD |
-| **Fallback (CPU)** | Generic CPU | Multi-threaded Mesa `llvmpipe` | Lavapipe (`mesa-vulkan-icd-swrast`) Vulkan 1.4 |
+| **Fallback (CPU)** | Generic CPU | Multi-threaded Mesa `llvmpipe` | Lavapipe (`mesa-vulkan-icd-swrast`) Multi-threaded CPU |
 
 > [!TIP]
-> **Vulkan Acceleration & Stability**: Termux's default `swiftshader` lacks Wayland WSI surface support and crashes Vulkan apps (e.g. `vkcube`) with SIGSEGV. `termuxwc` automatically exports `VK_ICD_FILENAMES` pointing to Turnip (for Qualcomm) or Lavapipe (for Mali/PowerVR/CPU) so Vulkan games and tools render cleanly out of the box.
+> **ARM Mali Hardware Acceleration**: ARM Mali GPUs on Android do not have an open-source Linux kernel Vulkan ICD like Qualcomm's Turnip. Standard VirGL GLES crashes on Mali due to restricted Android native sync fences. `termuxwc` solves this by automatically routing VirGL through ANGLE backed by the Android host Vulkan 1.3 driver (`--angle-vulkan`), providing reliable 3D GPU hardware acceleration without crashes.
 
-### High-Refresh Rate (120+ FPS Streaming)
-`termuxwc` supports uncapped high-refresh rate rendering and VNC streaming (120 Hz, 144 Hz, or custom). 
+### High-Refresh Rate (120+ FPS Headless Frame Clock)
+`termuxwc` features a high-precision internal frame timer driving wlroots scene commits and client frame callbacks at up to 120 Hz, eliminating offscreen stalls in headless environments.
 Set your preferred target FPS when starting the session:
 ```bash
 TERMUXWC_FPS=120 termuxwc-session
 ```
 
 ### Complete Graphical Environment & Session Profile
-`termuxwc-session` initializes a complete Linux graphical environment including a D-Bus session bus (`dbus-launch`), standard toolkit bridges (`GDK_BACKEND=wayland`, `QT_QPA_PLATFORM=wayland;xcb`, `SDL_VIDEODRIVER=wayland`), XDG directories, and GPU variables. 
+`termuxwc-session` initializes a complete Linux graphical environment including a D-Bus session bus (`dbus-launch`), standard toolkit bridges (`GDK_BACKEND=wayland`, `QT_QPA_PLATFORM=wayland`, `SDL_VIDEODRIVER=wayland`), XDG directories, and GPU variables. 
 
 All session environment variables are automatically written to `~/.config/termuxwc/env` on session start and can be sourced anywhere:
 ```bash
 source ~/.config/termuxwc/env
 ```
 
-### Display Backends: Native Termux:X11 & Headless VNC
-`termuxwc` automatically detects and configures your display output:
-1. **Termux:X11 (Native Direct Android Screen)**: If `termux-x11` is available, `termuxwc-session` automatically starts the server and brings the `Termux:X11` Android activity to the foreground. Frames are rendered directly onto the Android screen via shared memory (`ashmem` / `AHardwareBuffer`) with zero compression lag at full 120 FPS.
-2. **Headless WayVNC**: If running headless (or passed `-H` / `--headless`), `termuxwc` runs headlessly and streams via `wayvnc` on port `5900` for connection via any VNC viewer (such as AVNC).
+### Pure Wayland & WayVNC Streaming Architecture
+`termuxwc` is a pure native Wayland compositor. It operates completely independently without `termux-x11`:
+* **Compositor**: Headless `termuxwc -H -r 120` running natively in Termux userspace.
+* **Streamer**: `wayvnc` streaming directly over `0.0.0.0:5900` at full 120 FPS.
+* **Clients**: Connect from any VNC client (e.g. [AVNC](https://github.com/gstansev/AVNC) on Android at `127.0.0.1:5900` or remotely over LAN).
 
-### GPU Diagnostics & Benchmark Tool
-`termuxwc` includes a built-in diagnostic and benchmarking tool:
+### GPU Diagnostics & 3D Benchmark Tools
+`termuxwc` includes built-in diagnostic and benchmarking tools:
 ```bash
+# Full GPU driver stack and bridge diagnostic check
 termuxwc-gpu-check
+
+# Real-time native Wayland 3D GPU accelerated cube benchmark
+termuxwc-cube
 ```
 This utility:
 - Detects the physical SoC and GPU silicon (`/dev/mali0`, `/dev/kgsl-3d0`, `/dev/dri/*`).
 - Validates the active VirGL hardware 3D bridge (`virpipe` / ANGLE-Vulkan).
-- Verifies Wayland EGL and GLX hardware acceleration.
-- Runs an interactive 3D benchmark measuring real frame rates.
+- Verifies native Wayland EGL hardware acceleration on Mali-G68 / Adreno.
+- Measures real-time FPS and buffer swap latencies.
 
-To run any application with GPU acceleration manually:
+To run any application with GPU acceleration:
 ```bash
 GALLIUM_DRIVER=virpipe <application>
 ```

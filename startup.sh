@@ -25,7 +25,6 @@ VNC_PID=
 FOOT_PID=
 VIRGL_PID=
 DBUS_PID=
-X11_PID=
 
 cleanup() {
     echo ""
@@ -34,7 +33,6 @@ cleanup() {
     [ -n "$VNC_PID" ] && kill "$VNC_PID" &>/dev/null
     [ -n "$COMPOSITOR_PID" ] && kill "$COMPOSITOR_PID" &>/dev/null
     [ -n "$VIRGL_PID" ] && kill "$VIRGL_PID" &>/dev/null
-    [ -n "$X11_PID" ] && kill "$X11_PID" &>/dev/null
     [ -n "$DBUS_PID" ] && kill "$DBUS_PID" &>/dev/null
     rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayvnc* &>/dev/null || true
     rm -f /data/data/com.termux/files/usr/tmp/.virgl_test &>/dev/null || true
@@ -145,10 +143,10 @@ fi
 export XDG_SESSION_TYPE="wayland"
 export XDG_CURRENT_DESKTOP="sway"
 export XDG_SESSION_DESKTOP="sway"
-export GDK_BACKEND="wayland,x11"
-export QT_QPA_PLATFORM="wayland;xcb"
+export GDK_BACKEND="wayland"
+export QT_QPA_PLATFORM="wayland"
 export QT_WAYLAND_DISABLE_WINDOWDECORATION="1"
-export SDL_VIDEODRIVER="wayland,x11"
+export SDL_VIDEODRIVER="wayland"
 export CLUTTER_BACKEND="wayland"
 export MOZ_ENABLE_WAYLAND="1"
 export ELECTRON_OZONE_PLATFORM_HINT="auto"
@@ -160,65 +158,13 @@ export WLR_NO_HARDWARE_CURSORS="1"
 echo "Checking compositor binary..."
 ninja -C build &>/dev/null || true
 
-# --- Step 5: Start compositor (Auto-detect Termux-X11 vs Headless VNC) ---
+# --- Step 5: Start compositor (Headless Wayland Compositor) ---
 TERMUXWC_FPS="${TERMUXWC_FPS:-120}"
-USE_X11=0
-DISPLAY_MODE="Headless VNC (AVNC on 0.0.0.0:5900)"
-
-WANT_HEADLESS=0
-for arg in "$@"; do
-    if [ "$arg" = "-H" ] || [ "$arg" = "--headless" ]; then
-        WANT_HEADLESS=1
-        break
-    fi
-done
-[ "${TERMUXWC_HEADLESS:-0}" = "1" ] && WANT_HEADLESS=1
-
-if [ "$WANT_HEADLESS" -eq 0 ]; then
-    # Check if X11 server is already active on :0
-    if xdpyinfo -display :0 &>/dev/null; then
-        export DISPLAY=":0"
-        USE_X11=1
-        DISPLAY_MODE="Termux:X11 (Native Android Screen, Direct Zero-Lag Display)"
-    elif [ -x "$(command -v termux-x11)" ]; then
-        echo "Auto-starting Termux:X11 display server (:0)..."
-        termux-x11 :0 -ac &> /data/data/com.termux/files/usr/tmp/termux-x11.log &
-        X11_PID=$!
-
-        # Bring Termux:X11 Android app to foreground
-        if command -v am &>/dev/null; then
-            am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity &>/dev/null || true
-        fi
-
-        for i in $(seq 1 30); do
-            if xdpyinfo -display :0 &>/dev/null; then
-                export DISPLAY=":0"
-                USE_X11=1
-                DISPLAY_MODE="Termux:X11 (Native Android Screen, Direct Zero-Lag Display)"
-                echo ">> Termux:X11 display :0 is ACTIVE (PID $X11_PID)"
-                break
-            fi
-            sleep 0.1
-        done
-
-        if [ "$USE_X11" -eq 0 ]; then
-            echo "Notice: Termux:X11 did not respond; falling back to Headless VNC."
-            [ -n "$X11_PID" ] && kill "$X11_PID" &>/dev/null || true
-            X11_PID=
-        fi
-    fi
-fi
 
 > "$LOG_FILE"
-if [ "$USE_X11" -eq 1 ]; then
-    echo "Starting termuxwc on Termux:X11 native screen ($DISPLAY, ${TERMUXWC_FPS} FPS)..."
-    WLR_RENDERER=pixman XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DISPLAY="$DISPLAY" ./build/termuxwc -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
-    COMPOSITOR_PID=$!
-else
-    echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless)..."
-    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" ./build/termuxwc -H -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
-    COMPOSITOR_PID=$!
-fi
+echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless)..."
+XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER=pixman ./build/termuxwc -H -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+COMPOSITOR_PID=$!
 
 sleep 0.5
 if ! kill -0 "$COMPOSITOR_PID" &>/dev/null; then
@@ -274,27 +220,24 @@ export MESA_GLSL_VERSION_OVERRIDE="$MESA_GLSL_VERSION_OVERRIDE"
 export VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR"
 export VK_ICD_FILENAMES="$VK_ICD_FILENAMES"
 export LP_NUM_THREADS="$LP_NUM_THREADS"
-[ -n "$DISPLAY" ] && export DISPLAY="$DISPLAY"
 [ -n "$DBUS_SESSION_BUS_ADDRESS" ] && export DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
 EOF
 chmod 600 "$ENV_FILE"
 
-# --- Step 7: Start wayvnc (only in Headless VNC mode) ---
-if [ "$USE_X11" -eq 0 ]; then
-    echo "Starting wayvnc VNC server (${TERMUXWC_FPS} FPS, GPU accelerated) on 0.0.0.0:5900..."
-    > "$VNC_LOG"
-    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
-    WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
-        wayvnc -f "$TERMUXWC_FPS" -g 0.0.0.0:5900 &> "$VNC_LOG" &
-    VNC_PID=$!
+# --- Step 7: Start wayvnc (VNC streaming server) ---
+echo "Starting wayvnc VNC server (${TERMUXWC_FPS} FPS, GPU accelerated) on 0.0.0.0:5900..."
+> "$VNC_LOG"
+XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+    wayvnc -f "$TERMUXWC_FPS" 0.0.0.0:5900 &> "$VNC_LOG" &
+VNC_PID=$!
 
-    sleep 0.5
-    if ! kill -0 "$VNC_PID" &>/dev/null; then
-        echo "WARNING: wayvnc failed to start. Logs:"
-        cat "$VNC_LOG"
-    else
-        echo "wayvnc VNC server is ACTIVE on port 5900 (PID $VNC_PID)."
-    fi
+sleep 0.5
+if ! kill -0 "$VNC_PID" &>/dev/null; then
+    echo "WARNING: wayvnc failed to start. Logs:"
+    cat "$VNC_LOG"
+else
+    echo "wayvnc VNC server is ACTIVE on port 5900 (PID $VNC_PID)."
 fi
 
 # --- Step 8: Start terminal (foot) with full environment ---
@@ -326,7 +269,6 @@ env -i \
     VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR" \
     VK_ICD_FILENAMES="$VK_ICD_FILENAMES" \
     LP_NUM_THREADS="$LP_NUM_THREADS" \
-    ${DISPLAY:+DISPLAY="$DISPLAY"} \
     ${DBUS_SESSION_BUS_ADDRESS:+DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"} \
     foot &> "$FOOT_LOG" &
 FOOT_PID=$!
@@ -341,17 +283,13 @@ fi
 
 echo ""
 echo "=== Desktop Session is Ready ==="
-echo "Display Output   : $DISPLAY_MODE"
+echo "Display Output   : Headless Wayland (wayvnc on 0.0.0.0:5900)"
 echo "GPU Acceleration : $DETECTED_GPU ($ACCEL_TYPE)"
 echo "OpenGL Backend   : ${GALLIUM_DRIVER:-none}"
 echo "Vulkan Driver    : $VULKAN_DRIVER"
 echo "Refresh Rate     : ${TERMUXWC_FPS} FPS"
 echo "Environment File : $ENV_FILE"
-if [ "$USE_X11" -eq 0 ]; then
-    echo "Connect VNC to   : 127.0.0.1:5900 (or localhost:5900)"
-else
-    echo "Screen Output    : Active inside Termux:X11 app"
-fi
+echo "Connect VNC to   : 127.0.0.1:5900 (AVNC on phone or remote PC)"
 echo "Press Ctrl+C to stop the session."
 echo ""
 
