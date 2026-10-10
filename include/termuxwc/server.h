@@ -172,6 +172,7 @@ struct termuxwc_server {
 
 	int default_width;
 	int default_height;
+	int default_refresh_rate;
 };
 
 #endif

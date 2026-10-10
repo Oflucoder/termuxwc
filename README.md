@@ -154,14 +154,28 @@ background #16161e
        Physical GPU (Adreno / Mali / PowerVR)
 ```
 
-| GPU Architecture | Node / Detection | Driver Stack |
-| :--- | :--- | :--- |
-| **Qualcomm Adreno** | `/dev/kgsl-3d0` | Host Vendor GLES via VirGL / Turnip + Zink |
-| **ARM Mali** | `/dev/mali0` | Host Vendor GLES (`libGLES_mali.so`) via VirGL |
-| **PowerVR / Rogue** | `/dev/pvr_sync` | Host Vendor GLES (`libGLES_pvr.so`) via VirGL |
-| **Samsung Xclipse** | `/dev/dri/renderD128` | Host AMD GLES via VirGL |
-| **Linux Direct DRM** | `/dev/dri/renderD128` | Direct Mesa DRM / GBM pass-through |
-| **Fallback** | Generic CPU | Multi-threaded Mesa `llvmpipe` |
+| GPU Architecture | Node / Detection | OpenGL Acceleration | Vulkan Driver |
+| :--- | :--- | :--- | :--- |
+| **Qualcomm Adreno** | `/dev/kgsl-3d0` | Host GLES via VirGL / Zink | Turnip (`mesa-vulkan-icd-freedreno`) Direct Hardware |
+| **ARM Mali** | `/dev/mali0` | Host GLES (`libGLES_mali.so`) via VirGL | Lavapipe (`mesa-vulkan-icd-swrast`) Vulkan 1.4 |
+| **PowerVR / Rogue** | `/dev/pvr_sync` | Host GLES (`libGLES_pvr.so`) via VirGL | Lavapipe (`mesa-vulkan-icd-swrast`) Vulkan 1.4 |
+| **Samsung Xclipse** | `/dev/dri/renderD128` | Host AMD GLES via VirGL | Lavapipe (`mesa-vulkan-icd-swrast`) Vulkan 1.4 |
+| **Linux Direct DRM** | `/dev/dri/renderD128` | Direct Mesa DRM / GBM | Direct Mesa Vulkan ICD |
+| **Fallback (CPU)** | Generic CPU | Multi-threaded Mesa `llvmpipe` | Lavapipe (`mesa-vulkan-icd-swrast`) Vulkan 1.4 |
+
+> [!TIP]
+> **Vulkan Acceleration & Stability**: Termux's default `swiftshader` lacks Wayland WSI surface support and crashes Vulkan apps (e.g. `vkcube`) with SIGSEGV. `termuxwc` automatically exports `VK_ICD_FILENAMES` pointing to Turnip (for Qualcomm) or Lavapipe (for Mali/PowerVR/CPU) so Vulkan games and tools render cleanly out of the box.
+
+### High-Refresh Rate (120+ FPS Streaming)
+`termuxwc` supports uncapped high-refresh rate rendering and VNC streaming (120 Hz, 144 Hz, or custom). 
+Set your preferred target FPS when starting the session:
+```bash
+TERMUXWC_FPS=120 termuxwc-session
+```
+Or run the compositor directly:
+```bash
+termuxwc -H -r 120
+```
 
 To run any application with GPU acceleration manually:
 ```bash

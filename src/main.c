@@ -1090,7 +1090,8 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 		wlr_output_state_set_mode(&state, mode);
 	} else {
 		wlr_output_state_set_custom_mode(&state,
-			server->default_width, server->default_height, 60000);
+			server->default_width, server->default_height,
+			server->default_refresh_rate > 0 ? server->default_refresh_rate : 120000);
 	}
 
 	wlr_output_commit_state(wlr_output, &state);
@@ -1451,6 +1452,11 @@ int main(int argc, char *argv[]) {
 	struct termuxwc_server server = {0};
 	server.default_width = 1280;
 	server.default_height = 720;
+	server.default_refresh_rate = 120000;
+	const char *env_refresh = getenv("TERMUXWC_REFRESH_RATE");
+	if (env_refresh && atoi(env_refresh) > 0) {
+		server.default_refresh_rate = atoi(env_refresh) * 1000;
+	}
 	server.active_workspace = 1;
 
 	for (int i = 0; i < NUM_WORKSPACES; i++) {
@@ -1467,7 +1473,7 @@ int main(int argc, char *argv[]) {
 	char *custom_renderer = NULL;
 
 	int opt;
-	while ((opt = getopt(argc, argv, "s:w:h:HR:")) != -1) {
+	while ((opt = getopt(argc, argv, "s:w:h:r:HR:")) != -1) {
 		switch (opt) {
 		case 's':
 			startup_cmd = optarg;
@@ -1480,6 +1486,10 @@ int main(int argc, char *argv[]) {
 			server.default_height = atoi(optarg);
 			if (server.default_height <= 0) server.default_height = 720;
 			break;
+		case 'r':
+			server.default_refresh_rate = atoi(optarg) * 1000;
+			if (server.default_refresh_rate <= 0) server.default_refresh_rate = 120000;
+			break;
 		case 'H':
 			force_headless = true;
 			break;
@@ -1487,7 +1497,7 @@ int main(int argc, char *argv[]) {
 			custom_renderer = optarg;
 			break;
 		default:
-			fprintf(stderr, "Usage: %s [-s <cmd>] [-w <width>] [-h <height>] [-H (headless)] [-R <auto|gles2|vulkan|pixman>]\n", argv[0]);
+			fprintf(stderr, "Usage: %s [-s <cmd>] [-w <width>] [-h <height>] [-r <fps>] [-H (headless)] [-R <auto|gles2|vulkan|pixman>]\n", argv[0]);
 			return 1;
 		}
 	}

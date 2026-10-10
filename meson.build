@@ -1,6 +1,16 @@
-project('termuxwc', 'c', version: '0.4', default_options: ['warning_level=2', 'c_std=c11'])
+project('termuxwc', 'c', version: '0.4', default_options: [
+  'warning_level=2',
+  'c_std=c11',
+  'buildtype=release',
+  'optimization=3',
+  'b_lto=true',
+  'b_ndebug=true'
+])
 
-add_project_arguments('-DWLR_USE_UNSTABLE', language: 'c')
+add_project_arguments([
+  '-DWLR_USE_UNSTABLE',
+  '-fomit-frame-pointer'
+], language: 'c')
 
 cc = meson.get_compiler('c')
 wlroots_dep = dependency('wlroots-0.19', version: '>=0.19.0', required: true)

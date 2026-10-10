@@ -107,17 +107,28 @@ if [ -x "$(command -v virgl_test_server_android)" ]; then
     fi
 else
     echo "NOTE: virgl_test_server_android not installed; using standard Mesa driver."
-    export GALLIUM_DRIVER=llvmpipe
+fi
+
+# --- Vulkan Graphics Driver Configuration ---
+if [ "$GPU_VENDOR" = "Qualcomm" ] && [ -f /data/data/com.termux/files/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json ]; then
+    export VK_ICD_FILENAMES="/data/data/com.termux/files/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+    VULKAN_DRIVER="Turnip (Qualcomm Adreno Hardware Direct)"
+elif [ -f /data/data/com.termux/files/usr/share/vulkan/icd.d/lvp_icd.aarch64.json ]; then
+    export VK_ICD_FILENAMES="/data/data/com.termux/files/usr/share/vulkan/icd.d/lvp_icd.aarch64.json"
+    VULKAN_DRIVER="Lavapipe (Mesa Vulkan 1.4)"
+else
+    VULKAN_DRIVER="System Default"
 fi
 
 # --- Step 3: Ensure compositor binary is up to date ---
 echo "Checking compositor binary..."
 ninja -C build &>/dev/null || true
 
-# --- Step 4: Start compositor ---
-echo "Starting termuxwc Sway-grade compositor..."
+# --- Step 4: Start compositor (High Refresh Rate) ---
+TERMUXWC_FPS="${TERMUXWC_FPS:-120}"
+echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS)..."
 > "$LOG_FILE"
-XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" ./build/termuxwc -H &> "$LOG_FILE" &
+XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" ./build/termuxwc -H -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
 COMPOSITOR_PID=$!
 
 sleep 0.5
@@ -148,12 +159,12 @@ fi
 export WAYLAND_DISPLAY=$(basename "$WAYLAND_SOCKET")
 echo "Wayland compositor ready on WAYLAND_DISPLAY=$WAYLAND_DISPLAY (socket: $WAYLAND_SOCKET)"
 
-# --- Step 6: Start wayvnc ---
-echo "Starting wayvnc VNC server on 0.0.0.0:5900..."
+# --- Step 6: Start wayvnc (Uncapped / 120+ FPS with GPU Acceleration) ---
+echo "Starting wayvnc VNC server (${TERMUXWC_FPS} FPS, GPU accelerated) on 0.0.0.0:5900..."
 > "$VNC_LOG"
 XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
 WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
-    wayvnc 0.0.0.0:5900 &> "$VNC_LOG" &
+    wayvnc -f "$TERMUXWC_FPS" -g 0.0.0.0:5900 &> "$VNC_LOG" &
 VNC_PID=$!
 
 sleep 0.5
@@ -172,6 +183,7 @@ WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
 GALLIUM_DRIVER="$GALLIUM_DRIVER" \
 MESA_GL_VERSION_OVERRIDE="$MESA_GL_VERSION_OVERRIDE" \
 MESA_GLSL_VERSION_OVERRIDE="$MESA_GLSL_VERSION_OVERRIDE" \
+VK_ICD_FILENAMES="$VK_ICD_FILENAMES" \
     foot &> "$FOOT_LOG" &
 FOOT_PID=$!
 
@@ -186,7 +198,9 @@ fi
 echo ""
 echo "=== Desktop Session is Ready ==="
 echo "GPU Acceleration : $DETECTED_GPU ($ACCEL_TYPE)"
-echo "Driver Backend   : ${GALLIUM_DRIVER:-none}"
+echo "OpenGL Backend   : ${GALLIUM_DRIVER:-none}"
+echo "Vulkan Driver    : $VULKAN_DRIVER"
+echo "Refresh Rate     : ${TERMUXWC_FPS} FPS (High-Refresh Streaming)"
 echo "Connect VNC to   : 127.0.0.1:5900 (or localhost:5900)"
 echo "Press Ctrl+C to stop the session."
 echo ""

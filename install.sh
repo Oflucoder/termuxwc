@@ -10,12 +10,17 @@ PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 1. Install all required dependencies from Termux mirrors
-echo ">> Step 1/4: Installing required packages (Wayland, pixman, xkb, wayvnc, foot, virgl)..."
+echo ">> Step 1/4: Installing required packages (Wayland, pixman, xkb, wayvnc, foot, virgl, vulkan)..."
 pkg update -y
 pkg install -y \
     libwayland wayland-protocols \
     libxkbcommon libpixman \
-    wayvnc foot virglrenderer-android curl tar
+    wayvnc foot virglrenderer-android curl tar \
+    vulkan-loader-generic vulkan-tools \
+    mesa-vulkan-icd-swrast mesa-vulkan-icd-freedreno
+
+# Purge swiftshader if present to prevent null pointer crashes on Wayland WSI
+pkg uninstall -y swiftshader 2>/dev/null || true
 
 # 2. Deploy prebuilt patched wlroots library and termuxwc binary
 echo ">> Step 2/4: Deploying precompiled binaries..."

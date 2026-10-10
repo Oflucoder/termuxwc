@@ -1,0 +1,17 @@
+# termuxwc Sway-grade Tiling Window Manager Configuration
+# Mod key: Mod4 = Super/Windows key, Mod1 = Alt key, ModBoth = both
+mod ModBoth
+
+# Application commands
+terminal foot
+launcher foot -e fzf
+
+# Geometry & Gaps (pixels)
+inner_gap 6
+outer_gap 8
+border_width 2
+
+# Colors (Hex)
+active_border #7aa2f7
+inactive_border #3b4261
+background #16161e
