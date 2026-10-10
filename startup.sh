@@ -24,6 +24,7 @@ COMPOSITOR_PID=
 VNC_PID=
 FOOT_PID=
 VIRGL_PID=
+DBUS_PID=
 
 cleanup() {
     echo ""
@@ -32,6 +33,7 @@ cleanup() {
     [ -n "$VNC_PID" ] && kill "$VNC_PID" &>/dev/null
     [ -n "$COMPOSITOR_PID" ] && kill "$COMPOSITOR_PID" &>/dev/null
     [ -n "$VIRGL_PID" ] && kill "$VIRGL_PID" &>/dev/null
+    [ -n "$DBUS_PID" ] && kill "$DBUS_PID" &>/dev/null
     rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayvnc* &>/dev/null || true
     rm -f /data/data/com.termux/files/usr/tmp/.virgl_test &>/dev/null || true
     echo "All processes and GPU bridges stopped."
@@ -124,16 +126,55 @@ fi
 export LP_NUM_THREADS="${LP_NUM_THREADS:-8}"
 export VIRGL_CLIENT_DIR="/data/data/com.termux/files/usr/tmp"
 
-# --- Step 3: Ensure compositor binary is up to date ---
+# --- Step 3: Initialize D-Bus Session Bus & Desktop Environment ---
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-launch &>/dev/null; then
+    eval "$(dbus-launch --sh-syntax --exit-with-session 2>/dev/null)" || true
+    [ -n "$DBUS_SESSION_BUS_PID" ] && DBUS_PID="$DBUS_SESSION_BUS_PID"
+    echo ">> D-Bus session bus active (PID ${DBUS_PID:-unknown})"
+fi
+
+# Comprehensive Standard Linux Graphical Environment
+export XDG_SESSION_TYPE="wayland"
+export XDG_CURRENT_DESKTOP="sway"
+export XDG_SESSION_DESKTOP="sway"
+export GDK_BACKEND="wayland,x11"
+export QT_QPA_PLATFORM="wayland;xcb"
+export QT_WAYLAND_DISABLE_WINDOWDECORATION="1"
+export SDL_VIDEODRIVER="wayland,x11"
+export CLUTTER_BACKEND="wayland"
+export MOZ_ENABLE_WAYLAND="1"
+export ELECTRON_OZONE_PLATFORM_HINT="auto"
+export XDG_DATA_DIRS="/data/data/com.termux/files/usr/share:${XDG_DATA_DIRS:-/data/data/com.termux/files/usr/share}"
+export XDG_CONFIG_DIRS="/data/data/com.termux/files/usr/etc/xdg"
+export WLR_NO_HARDWARE_CURSORS="1"
+
+# --- Step 4: Ensure compositor binary is up to date ---
 echo "Checking compositor binary..."
 ninja -C build &>/dev/null || true
 
-# --- Step 4: Start compositor (High Refresh Rate) ---
+# --- Step 5: Start compositor (Auto-detect Termux-X11 vs Headless VNC) ---
 TERMUXWC_FPS="${TERMUXWC_FPS:-120}"
-echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS)..."
+USE_X11=0
+DISPLAY_MODE="Headless VNC (AVNC on 0.0.0.0:5900)"
+
+if [ -n "$DISPLAY" ] || [ -S "/data/data/com.termux/files/usr/tmp/.X11-unix/X0" ]; then
+    export DISPLAY="${DISPLAY:-:0}"
+    if [ -S "/data/data/com.termux/files/usr/tmp/.X11-unix/X0" ] || xset q &>/dev/null; then
+        USE_X11=1
+        DISPLAY_MODE="Termux:X11 (Native Android Screen, Direct Display)"
+    fi
+fi
+
 > "$LOG_FILE"
-XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" ./build/termuxwc -H -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
-COMPOSITOR_PID=$!
+if [ "$USE_X11" -eq 1 ]; then
+    echo "Starting termuxwc on Termux:X11 native screen ($DISPLAY, ${TERMUXWC_FPS} FPS)..."
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DISPLAY="$DISPLAY" ./build/termuxwc -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+    COMPOSITOR_PID=$!
+else
+    echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless)..."
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" ./build/termuxwc -H -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+    COMPOSITOR_PID=$!
+fi
 
 sleep 0.5
 if ! kill -0 "$COMPOSITOR_PID" &>/dev/null; then
@@ -142,7 +183,7 @@ if ! kill -0 "$COMPOSITOR_PID" &>/dev/null; then
     exit 1
 fi
 
-# --- Step 5: Wait for Wayland socket ---
+# --- Step 6: Wait for Wayland socket ---
 WAYLAND_SOCKET=""
 for i in $(seq 1 30); do
     for sock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
@@ -163,33 +204,86 @@ fi
 export WAYLAND_DISPLAY=$(basename "$WAYLAND_SOCKET")
 echo "Wayland compositor ready on WAYLAND_DISPLAY=$WAYLAND_DISPLAY (socket: $WAYLAND_SOCKET)"
 
-# --- Step 6: Start wayvnc (Uncapped / 120+ FPS with GPU Acceleration) ---
-echo "Starting wayvnc VNC server (${TERMUXWC_FPS} FPS, GPU accelerated) on 0.0.0.0:5900..."
-> "$VNC_LOG"
-XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
-WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
-    wayvnc -f "$TERMUXWC_FPS" -g 0.0.0.0:5900 &> "$VNC_LOG" &
-VNC_PID=$!
+# Export and persist session environment profile (~/.config/termuxwc/env)
+ENV_FILE="$HOME/.config/termuxwc/env"
+mkdir -p "$(dirname "$ENV_FILE")"
+cat << EOF > "$ENV_FILE"
+# termuxwc Complete Graphical Environment
+export XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR"
+export WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
+export XDG_SESSION_TYPE="$XDG_SESSION_TYPE"
+export XDG_CURRENT_DESKTOP="$XDG_CURRENT_DESKTOP"
+export XDG_SESSION_DESKTOP="$XDG_SESSION_DESKTOP"
+export GDK_BACKEND="$GDK_BACKEND"
+export QT_QPA_PLATFORM="$QT_QPA_PLATFORM"
+export QT_WAYLAND_DISABLE_WINDOWDECORATION="$QT_WAYLAND_DISABLE_WINDOWDECORATION"
+export SDL_VIDEODRIVER="$SDL_VIDEODRIVER"
+export CLUTTER_BACKEND="$CLUTTER_BACKEND"
+export MOZ_ENABLE_WAYLAND="$MOZ_ENABLE_WAYLAND"
+export ELECTRON_OZONE_PLATFORM_HINT="$ELECTRON_OZONE_PLATFORM_HINT"
+export XDG_DATA_DIRS="$XDG_DATA_DIRS"
+export XDG_CONFIG_DIRS="$XDG_CONFIG_DIRS"
+export WLR_NO_HARDWARE_CURSORS="$WLR_NO_HARDWARE_CURSORS"
+export GALLIUM_DRIVER="$GALLIUM_DRIVER"
+export MESA_GL_VERSION_OVERRIDE="$MESA_GL_VERSION_OVERRIDE"
+export MESA_GLSL_VERSION_OVERRIDE="$MESA_GLSL_VERSION_OVERRIDE"
+export VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR"
+export VK_ICD_FILENAMES="$VK_ICD_FILENAMES"
+export LP_NUM_THREADS="$LP_NUM_THREADS"
+[ -n "$DISPLAY" ] && export DISPLAY="$DISPLAY"
+[ -n "$DBUS_SESSION_BUS_ADDRESS" ] && export DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
+EOF
+chmod 600 "$ENV_FILE"
 
-sleep 0.5
-if ! kill -0 "$VNC_PID" &>/dev/null; then
-    echo "WARNING: wayvnc failed to start. Logs:"
-    cat "$VNC_LOG"
-else
-    echo "wayvnc VNC server is ACTIVE on port 5900 (PID $VNC_PID)."
+# --- Step 7: Start wayvnc (only in Headless VNC mode) ---
+if [ "$USE_X11" -eq 0 ]; then
+    echo "Starting wayvnc VNC server (${TERMUXWC_FPS} FPS, GPU accelerated) on 0.0.0.0:5900..."
+    > "$VNC_LOG"
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+    WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+        wayvnc -f "$TERMUXWC_FPS" -g 0.0.0.0:5900 &> "$VNC_LOG" &
+    VNC_PID=$!
+
+    sleep 0.5
+    if ! kill -0 "$VNC_PID" &>/dev/null; then
+        echo "WARNING: wayvnc failed to start. Logs:"
+        cat "$VNC_LOG"
+    else
+        echo "wayvnc VNC server is ACTIVE on port 5900 (PID $VNC_PID)."
+    fi
 fi
 
-# --- Step 7: Start terminal with GPU Acceleration (foot) ---
-echo "Starting terminal (foot) with GPU acceleration..."
+# --- Step 8: Start terminal (foot) with full environment ---
+echo "Starting terminal (foot) with full graphical environment..."
 > "$FOOT_LOG"
-XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
-WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
-GALLIUM_DRIVER="$GALLIUM_DRIVER" \
-MESA_GL_VERSION_OVERRIDE="$MESA_GL_VERSION_OVERRIDE" \
-MESA_GLSL_VERSION_OVERRIDE="$MESA_GLSL_VERSION_OVERRIDE" \
-VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR" \
-VK_ICD_FILENAMES="$VK_ICD_FILENAMES" \
-LP_NUM_THREADS="$LP_NUM_THREADS" \
+env -i \
+    HOME="$HOME" \
+    USER="$USER" \
+    PATH="$PATH" \
+    TERM="xterm-256color" \
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+    WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+    XDG_SESSION_TYPE="$XDG_SESSION_TYPE" \
+    XDG_CURRENT_DESKTOP="$XDG_CURRENT_DESKTOP" \
+    XDG_SESSION_DESKTOP="$XDG_SESSION_DESKTOP" \
+    GDK_BACKEND="$GDK_BACKEND" \
+    QT_QPA_PLATFORM="$QT_QPA_PLATFORM" \
+    QT_WAYLAND_DISABLE_WINDOWDECORATION="$QT_WAYLAND_DISABLE_WINDOWDECORATION" \
+    SDL_VIDEODRIVER="$SDL_VIDEODRIVER" \
+    CLUTTER_BACKEND="$CLUTTER_BACKEND" \
+    MOZ_ENABLE_WAYLAND="$MOZ_ENABLE_WAYLAND" \
+    ELECTRON_OZONE_PLATFORM_HINT="$ELECTRON_OZONE_PLATFORM_HINT" \
+    XDG_DATA_DIRS="$XDG_DATA_DIRS" \
+    XDG_CONFIG_DIRS="$XDG_CONFIG_DIRS" \
+    WLR_NO_HARDWARE_CURSORS="$WLR_NO_HARDWARE_CURSORS" \
+    GALLIUM_DRIVER="$GALLIUM_DRIVER" \
+    MESA_GL_VERSION_OVERRIDE="$MESA_GL_VERSION_OVERRIDE" \
+    MESA_GLSL_VERSION_OVERRIDE="$MESA_GLSL_VERSION_OVERRIDE" \
+    VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR" \
+    VK_ICD_FILENAMES="$VK_ICD_FILENAMES" \
+    LP_NUM_THREADS="$LP_NUM_THREADS" \
+    ${DISPLAY:+DISPLAY="$DISPLAY"} \
+    ${DBUS_SESSION_BUS_ADDRESS:+DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"} \
     foot &> "$FOOT_LOG" &
 FOOT_PID=$!
 
@@ -203,11 +297,17 @@ fi
 
 echo ""
 echo "=== Desktop Session is Ready ==="
+echo "Display Output   : $DISPLAY_MODE"
 echo "GPU Acceleration : $DETECTED_GPU ($ACCEL_TYPE)"
 echo "OpenGL Backend   : ${GALLIUM_DRIVER:-none}"
 echo "Vulkan Driver    : $VULKAN_DRIVER"
-echo "Refresh Rate     : ${TERMUXWC_FPS} FPS (High-Refresh Streaming)"
-echo "Connect VNC to   : 127.0.0.1:5900 (or localhost:5900)"
+echo "Refresh Rate     : ${TERMUXWC_FPS} FPS"
+echo "Environment File : $ENV_FILE"
+if [ "$USE_X11" -eq 0 ]; then
+    echo "Connect VNC to   : 127.0.0.1:5900 (or localhost:5900)"
+else
+    echo "Screen Output    : Active inside Termux:X11 app"
+fi
 echo "Press Ctrl+C to stop the session."
 echo ""
 

@@ -15,7 +15,7 @@ pkg update -y
 pkg install -y \
     libwayland wayland-protocols \
     libxkbcommon libpixman \
-    wayvnc foot virglrenderer-android curl tar \
+    wayvnc foot virglrenderer-android curl tar dbus \
     vulkan-loader-generic vulkan-tools \
     mesa-vulkan-icd-swrast mesa-vulkan-icd-freedreno
 

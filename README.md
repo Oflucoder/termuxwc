@@ -172,10 +172,19 @@ Set your preferred target FPS when starting the session:
 ```bash
 TERMUXWC_FPS=120 termuxwc-session
 ```
-Or run the compositor directly:
+
+### Complete Graphical Environment & Session Profile
+`termuxwc-session` initializes a complete Linux graphical environment including a D-Bus session bus (`dbus-launch`), standard toolkit bridges (`GDK_BACKEND=wayland`, `QT_QPA_PLATFORM=wayland;xcb`, `SDL_VIDEODRIVER=wayland`), XDG directories, and GPU variables. 
+
+All session environment variables are automatically written to `~/.config/termuxwc/env` on session start and can be sourced anywhere:
 ```bash
-termuxwc -H -r 120
+source ~/.config/termuxwc/env
 ```
+
+### Display Backends: Native Termux:X11 & Headless VNC
+`termuxwc` automatically detects your display output:
+1. **Termux:X11 (Native Direct Android Screen)**: If the `Termux:X11` server is active, `termuxwc` uses its native `wlr_x11_backend` to render directly onto the Android screen with zero compression and native phone refresh rate.
+2. **Headless WayVNC (Default)**: If running standalone, `termuxwc` runs headlessly and starts `wayvnc` on port `5900` for connection via any VNC viewer (e.g., AVNC).
 
 To run any application with GPU acceleration manually:
 ```bash
