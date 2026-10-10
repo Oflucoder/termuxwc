@@ -1687,6 +1687,8 @@ int main(int argc, char *argv[]) {
 	}
 
 	wl_display_destroy_clients(server.wl_display);
+	wl_list_remove(&server.new_input.link);
+	wl_list_remove(&server.new_output.link);
 	wlr_xcursor_manager_destroy(server.cursor_mgr);
 	wlr_cursor_destroy(server.cursor);
 	wlr_output_layout_destroy(server.output_layout);

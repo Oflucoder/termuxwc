@@ -25,6 +25,7 @@ VNC_PID=
 FOOT_PID=
 VIRGL_PID=
 DBUS_PID=
+X11_PID=
 
 cleanup() {
     echo ""
@@ -33,6 +34,7 @@ cleanup() {
     [ -n "$VNC_PID" ] && kill "$VNC_PID" &>/dev/null
     [ -n "$COMPOSITOR_PID" ] && kill "$COMPOSITOR_PID" &>/dev/null
     [ -n "$VIRGL_PID" ] && kill "$VIRGL_PID" &>/dev/null
+    [ -n "$X11_PID" ] && kill "$X11_PID" &>/dev/null
     [ -n "$DBUS_PID" ] && kill "$DBUS_PID" &>/dev/null
     rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayvnc* &>/dev/null || true
     rm -f /data/data/com.termux/files/usr/tmp/.virgl_test &>/dev/null || true
@@ -82,14 +84,20 @@ echo ">> Detected Hardware: $DETECTED_GPU [Vendor: $GPU_VENDOR]"
 echo ">> Target Profile:    $ACCEL_TYPE"
 
 # --- Step 2: Initialize Universal GPU Acceleration Bridge ---
+VIRGL_FLAGS="--multi-clients"
+if [ "$GPU_VENDOR" = "ARM" ] && [ -d /data/data/com.termux/files/usr/opt/angle-android/vulkan ]; then
+    # ARM Mali on Android: ANGLE over Android Vulkan eliminates sync fence fd limitation
+    VIRGL_FLAGS="--angle-vulkan --multi-clients"
+fi
+
 if [ -x "$(command -v virgl_test_server_android)" ]; then
-    echo "Starting VirGL hardware GPU bridge server..."
+    echo "Starting VirGL hardware GPU bridge server ($VIRGL_FLAGS)..."
     > "$GPU_LOG"
-    virgl_test_server_android --multi-clients &> "$GPU_LOG" &
+    virgl_test_server_android $VIRGL_FLAGS &> "$GPU_LOG" &
     VIRGL_PID=$!
     
     # Wait for the VirGL UNIX socket
-    for i in $(seq 1 20); do
+    for i in $(seq 1 25); do
         if [ -S /data/data/com.termux/files/usr/tmp/.virgl_test ]; then
             break
         fi
@@ -157,18 +165,54 @@ TERMUXWC_FPS="${TERMUXWC_FPS:-120}"
 USE_X11=0
 DISPLAY_MODE="Headless VNC (AVNC on 0.0.0.0:5900)"
 
-if [ -n "$DISPLAY" ] || [ -S "/data/data/com.termux/files/usr/tmp/.X11-unix/X0" ]; then
-    export DISPLAY="${DISPLAY:-:0}"
-    if [ -S "/data/data/com.termux/files/usr/tmp/.X11-unix/X0" ] || xset q &>/dev/null; then
+WANT_HEADLESS=0
+for arg in "$@"; do
+    if [ "$arg" = "-H" ] || [ "$arg" = "--headless" ]; then
+        WANT_HEADLESS=1
+        break
+    fi
+done
+[ "${TERMUXWC_HEADLESS:-0}" = "1" ] && WANT_HEADLESS=1
+
+if [ "$WANT_HEADLESS" -eq 0 ]; then
+    # Check if X11 server is already active on :0
+    if xdpyinfo -display :0 &>/dev/null; then
+        export DISPLAY=":0"
         USE_X11=1
-        DISPLAY_MODE="Termux:X11 (Native Android Screen, Direct Display)"
+        DISPLAY_MODE="Termux:X11 (Native Android Screen, Direct Zero-Lag Display)"
+    elif [ -x "$(command -v termux-x11)" ]; then
+        echo "Auto-starting Termux:X11 display server (:0)..."
+        termux-x11 :0 -ac &> /data/data/com.termux/files/usr/tmp/termux-x11.log &
+        X11_PID=$!
+
+        # Bring Termux:X11 Android app to foreground
+        if command -v am &>/dev/null; then
+            am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity &>/dev/null || true
+        fi
+
+        for i in $(seq 1 30); do
+            if xdpyinfo -display :0 &>/dev/null; then
+                export DISPLAY=":0"
+                USE_X11=1
+                DISPLAY_MODE="Termux:X11 (Native Android Screen, Direct Zero-Lag Display)"
+                echo ">> Termux:X11 display :0 is ACTIVE (PID $X11_PID)"
+                break
+            fi
+            sleep 0.1
+        done
+
+        if [ "$USE_X11" -eq 0 ]; then
+            echo "Notice: Termux:X11 did not respond; falling back to Headless VNC."
+            [ -n "$X11_PID" ] && kill "$X11_PID" &>/dev/null || true
+            X11_PID=
+        fi
     fi
 fi
 
 > "$LOG_FILE"
 if [ "$USE_X11" -eq 1 ]; then
     echo "Starting termuxwc on Termux:X11 native screen ($DISPLAY, ${TERMUXWC_FPS} FPS)..."
-    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DISPLAY="$DISPLAY" ./build/termuxwc -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+    WLR_RENDERER=pixman XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DISPLAY="$DISPLAY" ./build/termuxwc -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
     COMPOSITOR_PID=$!
 else
     echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless)..."

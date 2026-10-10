@@ -182,9 +182,20 @@ source ~/.config/termuxwc/env
 ```
 
 ### Display Backends: Native Termux:X11 & Headless VNC
-`termuxwc` automatically detects your display output:
-1. **Termux:X11 (Native Direct Android Screen)**: If the `Termux:X11` server is active, `termuxwc` uses its native `wlr_x11_backend` to render directly onto the Android screen with zero compression and native phone refresh rate.
-2. **Headless WayVNC (Default)**: If running standalone, `termuxwc` runs headlessly and starts `wayvnc` on port `5900` for connection via any VNC viewer (e.g., AVNC).
+`termuxwc` automatically detects and configures your display output:
+1. **Termux:X11 (Native Direct Android Screen)**: If `termux-x11` is available, `termuxwc-session` automatically starts the server and brings the `Termux:X11` Android activity to the foreground. Frames are rendered directly onto the Android screen via shared memory (`ashmem` / `AHardwareBuffer`) with zero compression lag at full 120 FPS.
+2. **Headless WayVNC**: If running headless (or passed `-H` / `--headless`), `termuxwc` runs headlessly and streams via `wayvnc` on port `5900` for connection via any VNC viewer (such as AVNC).
+
+### GPU Diagnostics & Benchmark Tool
+`termuxwc` includes a built-in diagnostic and benchmarking tool:
+```bash
+termuxwc-gpu-check
+```
+This utility:
+- Detects the physical SoC and GPU silicon (`/dev/mali0`, `/dev/kgsl-3d0`, `/dev/dri/*`).
+- Validates the active VirGL hardware 3D bridge (`virpipe` / ANGLE-Vulkan).
+- Verifies Wayland EGL and GLX hardware acceleration.
+- Runs an interactive 3D benchmark measuring real frame rates.
 
 To run any application with GPU acceleration manually:
 ```bash

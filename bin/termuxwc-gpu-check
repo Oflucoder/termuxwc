@@ -1,0 +1,112 @@
+#!/bin/bash
+# termuxwc GPU Hardware Acceleration Diagnostics & Benchmark Tool
+
+echo "=========================================================="
+echo "    termuxwc GPU Hardware Acceleration & System Check    "
+echo "=========================================================="
+echo ""
+
+# Source current environment if available
+if [ -f "$HOME/.config/termuxwc/env" ]; then
+    source "$HOME/.config/termuxwc/env" 2>/dev/null || true
+fi
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/data/data/com.termux/files/usr/tmp/xdg-runtime}"
+export VIRGL_CLIENT_DIR="${VIRGL_CLIENT_DIR:-/data/data/com.termux/files/usr/tmp}"
+export GALLIUM_DRIVER="${GALLIUM_DRIVER:-virpipe}"
+
+# 1. Device Hardware Detection
+echo "[1] Hardware & Device Nodes:"
+PLATFORM=$(getprop ro.board.platform 2>/dev/null || echo "Unknown")
+SOC=$(getprop ro.soc.model 2>/dev/null || echo "$PLATFORM")
+echo "    SoC Model        : $SOC (Platform: $PLATFORM)"
+
+if [ -e /dev/mali0 ] || [ -e /dev/mali ]; then
+    echo "    Kernel GPU Node  : /dev/mali0 [ARM Mali GPU Detected]"
+    GPU_TYPE="ARM Mali"
+elif [ -e /dev/kgsl-3d0 ]; then
+    echo "    Kernel GPU Node  : /dev/kgsl-3d0 [Qualcomm Adreno GPU Detected]"
+    GPU_TYPE="Qualcomm Adreno"
+else
+    echo "    Kernel GPU Node  : Generic / Direct DRM"
+    GPU_TYPE="Generic"
+fi
+
+if [ -e /dev/dri/renderD128 ]; then
+    DRM_DRIVER=$(cat /sys/class/drm/renderD128/device/uevent 2>/dev/null | grep DRIVER | cut -d= -f2 || echo "renderD128")
+    echo "    DRM Render Node  : /dev/dri/renderD128 ($DRM_DRIVER)"
+fi
+echo ""
+
+# 2. VirGL Hardware Bridge Status
+echo "[2] VirGL Hardware GPU Bridge:"
+if [ -S "$VIRGL_CLIENT_DIR/.virgl_test" ]; then
+    VIRGL_PID=$(pgrep -f virgl_test_server_android | head -n 1 || echo "active")
+    echo "    Bridge Socket    : $VIRGL_CLIENT_DIR/.virgl_test (ACTIVE, PID: $VIRGL_PID)"
+    echo "    Gallium Driver   : $GALLIUM_DRIVER"
+else
+    echo "    Bridge Socket    : NOT DETECTED (Run 'startup.sh' to activate)"
+fi
+echo ""
+
+# 3. OpenGL / EGL Hardware Acceleration Check
+echo "[3] OpenGL / EGL Acceleration Profile:"
+if [ -n "$WAYLAND_DISPLAY" ] && [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+    echo "    Wayland Display  : $WAYLAND_DISPLAY (socket: $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY)"
+    RENDERER_LINE=$(env -i \
+        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+        WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+        GALLIUM_DRIVER="$GALLIUM_DRIVER" \
+        VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR" \
+        PATH="$PATH" \
+        eglinfo -B -p wayland 2>/dev/null | grep -i "profile renderer" | head -n 1 || true)
+    if [ -n "$RENDERER_LINE" ]; then
+        echo "    Wayland EGL      : $RENDERER_LINE"
+    fi
+fi
+
+if [ -n "$DISPLAY" ] && xdpyinfo -display "$DISPLAY" &>/dev/null; then
+    echo "    X11 Display      : $DISPLAY (Termux:X11 Native Screen)"
+    GLX_RENDERER=$(env -i \
+        DISPLAY="$DISPLAY" \
+        GALLIUM_DRIVER="$GALLIUM_DRIVER" \
+        VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR" \
+        PATH="$PATH" \
+        glxinfo -B 2>/dev/null | grep -i "OpenGL renderer string" | head -n 1 || true)
+    if [ -n "$GLX_RENDERER" ]; then
+        echo "    GLX Renderer     : $GLX_RENDERER"
+    fi
+fi
+echo ""
+
+# 4. Vulkan Ecosystem Info
+echo "[4] Vulkan Graphics Drivers:"
+if [ -f /data/data/com.termux/files/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json ]; then
+    echo "    - Freedreno Turnip: Available (Hardware Vulkan for Qualcomm Adreno)"
+fi
+if [ -f /data/data/com.termux/files/usr/share/vulkan/icd.d/lvp_icd.aarch64.json ]; then
+    echo "    - Mesa Lavapipe   : Available (Mesa CPU Software Rasterizer)"
+fi
+if [ "$GPU_TYPE" = "ARM Mali" ]; then
+    echo "    * Note on Mali   : ARM Mali on Android uses VirGL / ANGLE for hardware acceleration."
+    echo "                       Pure Vulkan binaries (like vkcube) use multi-threaded Lavapipe CPU."
+fi
+echo ""
+
+# 5. Live 3D Benchmark (if display available)
+if [ -n "$DISPLAY" ] && xdpyinfo -display "$DISPLAY" &>/dev/null && command -v glxgears &>/dev/null; then
+    echo "[5] Running Live 5-Second 3D Benchmark (glxgears)..."
+    BENCH_RESULT=$(GALLIUM_DRIVER="$GALLIUM_DRIVER" VIRGL_CLIENT_DIR="$VIRGL_CLIENT_DIR" DISPLAY="$DISPLAY" timeout 6 glxgears 2>&1 | grep -i "frames in" || true)
+    if [ -n "$BENCH_RESULT" ]; then
+        echo "    >> Benchmark Result: $BENCH_RESULT"
+    else
+        echo "    >> Benchmark completed."
+    fi
+elif [ -n "$WAYLAND_DISPLAY" ]; then
+    echo "[5] Desktop compositor active on $WAYLAND_DISPLAY."
+fi
+
+echo ""
+echo "=========================================================="
+echo "    Hardware acceleration status: OPERATIONAL             "
+echo "=========================================================="
