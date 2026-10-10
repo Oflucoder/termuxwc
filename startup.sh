@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# --- termuxwc Startup Manager ---
-echo "=== termuxwc Desktop Session ==="
+# --- termuxwc Universal Desktop & GPU Acceleration Supervisor ---
+echo "=== termuxwc Desktop Session with Universal GPU Acceleration ==="
 
 export XDG_RUNTIME_DIR="/data/data/com.termux/files/usr/tmp/xdg-runtime"
 mkdir -p "$XDG_RUNTIME_DIR"
@@ -11,15 +11,19 @@ chmod 700 "$XDG_RUNTIME_DIR"
 pkill -9 -f termuxwc &>/dev/null || true
 pkill -9 -f wayvnc &>/dev/null || true
 pkill -9 -f foot &>/dev/null || true
+pkill -9 -f virgl_test_server_android &>/dev/null || true
 rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayvnc* &>/dev/null || true
+rm -f /data/data/com.termux/files/usr/tmp/.virgl_test &>/dev/null || true
 
 LOG_FILE="termuxwc.log"
 VNC_LOG="wayvnc.log"
 FOOT_LOG="foot.log"
+GPU_LOG="gpu.log"
 
 COMPOSITOR_PID=
 VNC_PID=
 FOOT_PID=
+VIRGL_PID=
 
 cleanup() {
     echo ""
@@ -27,20 +31,93 @@ cleanup() {
     [ -n "$FOOT_PID" ] && kill "$FOOT_PID" &>/dev/null
     [ -n "$VNC_PID" ] && kill "$VNC_PID" &>/dev/null
     [ -n "$COMPOSITOR_PID" ] && kill "$COMPOSITOR_PID" &>/dev/null
+    [ -n "$VIRGL_PID" ] && kill "$VIRGL_PID" &>/dev/null
     rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayvnc* &>/dev/null || true
-    echo "All processes stopped."
+    rm -f /data/data/com.termux/files/usr/tmp/.virgl_test &>/dev/null || true
+    echo "All processes and GPU bridges stopped."
     exit 0
 }
 trap cleanup INT TERM EXIT
 
-# Step 1: Ensure compositor binary is up to date
+# --- Step 1: Universal Mobile GPU Auto-Detection ---
+echo "Detecting Graphics Hardware..."
+
+DETECTED_GPU="Unknown"
+GPU_VENDOR="Unknown"
+ACCEL_TYPE="CPU Software (llvmpipe)"
+
+PLATFORM=$(getprop ro.board.platform 2>/dev/null || echo "")
+HARDWARE=$(getprop ro.hardware 2>/dev/null || echo "")
+SOC_MODEL=$(getprop ro.soc.model 2>/dev/null || echo "")
+
+if [ -e /dev/kgsl-3d0 ] && [ -r /dev/kgsl-3d0 ]; then
+    # Qualcomm Snapdragon (Adreno GPUs)
+    GPU_VENDOR="Qualcomm"
+    DETECTED_GPU="Adreno GPU (${SOC_MODEL:-$PLATFORM})"
+    ACCEL_TYPE="Hardware Acceleration"
+elif [ -e /dev/mali0 ] || [ -e /dev/mali ]; then
+    # ARM Mali (Samsung Exynos, MediaTek Dimensity/Helio, Google Tensor, HiSilicon Kirin)
+    GPU_VENDOR="ARM"
+    DETECTED_GPU="Mali GPU (${SOC_MODEL:-$PLATFORM})"
+    ACCEL_TYPE="Hardware Acceleration"
+elif [ -e /dev/pvr_sync ] || [ -e /dev/pvrsrvkm ]; then
+    # PowerVR (Unisoc, Rockchip)
+    GPU_VENDOR="Imagination"
+    DETECTED_GPU="PowerVR Rogue GPU (${SOC_MODEL:-$PLATFORM})"
+    ACCEL_TYPE="Hardware Acceleration"
+elif [ -e /dev/dri/renderD128 ] && [ -r /dev/dri/renderD128 ]; then
+    # Linux Desktop Direct DRM / AMD / Intel
+    GPU_VENDOR="DRM Direct"
+    DETECTED_GPU="Linux Direct DRM Node (${SOC_MODEL:-$PLATFORM})"
+    ACCEL_TYPE="Hardware Acceleration"
+else
+    GPU_VENDOR="CPU"
+    DETECTED_GPU="Software Rasterizer (${PLATFORM:-Generic})"
+    ACCEL_TYPE="Software (CPU)"
+fi
+
+echo ">> Detected Hardware: $DETECTED_GPU [Vendor: $GPU_VENDOR]"
+echo ">> Target Profile:    $ACCEL_TYPE"
+
+# --- Step 2: Initialize Universal GPU Acceleration Bridge ---
+if [ -x "$(command -v virgl_test_server_android)" ]; then
+    echo "Starting VirGL hardware GPU bridge server..."
+    > "$GPU_LOG"
+    virgl_test_server_android --multi-clients &> "$GPU_LOG" &
+    VIRGL_PID=$!
+    
+    # Wait for the VirGL UNIX socket
+    for i in $(seq 1 20); do
+        if [ -S /data/data/com.termux/files/usr/tmp/.virgl_test ]; then
+            break
+        fi
+        sleep 0.1
+    done
+
+    if kill -0 "$VIRGL_PID" &>/dev/null && [ -S /data/data/com.termux/files/usr/tmp/.virgl_test ]; then
+        echo ">> VirGL Hardware 3D Bridge is ACTIVE on $DETECTED_GPU (PID $VIRGL_PID)"
+        export GALLIUM_DRIVER=virpipe
+        export MESA_GL_VERSION_OVERRIDE=3.3
+        export MESA_GLSL_VERSION_OVERRIDE=330
+        export VIRGL_CLIENT_DIR="/data/data/com.termux/files/usr/tmp"
+    else
+        echo "WARNING: VirGL bridge failed to start. Falling back to multi-threaded CPU Mesa."
+        export LIBGL_ALWAYS_SOFTWARE=1
+        export GALLIUM_DRIVER=llvmpipe
+    fi
+else
+    echo "NOTE: virgl_test_server_android not installed; using standard Mesa driver."
+    export GALLIUM_DRIVER=llvmpipe
+fi
+
+# --- Step 3: Ensure compositor binary is up to date ---
 echo "Checking compositor binary..."
 ninja -C build &>/dev/null || true
 
-# Step 2: Start compositor
-echo "Starting termuxwc..."
+# --- Step 4: Start compositor ---
+echo "Starting termuxwc Sway-grade compositor..."
 > "$LOG_FILE"
-XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" ./build/termuxwc &> "$LOG_FILE" &
+XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" ./build/termuxwc -H &> "$LOG_FILE" &
 COMPOSITOR_PID=$!
 
 sleep 0.5
@@ -50,7 +127,7 @@ if ! kill -0 "$COMPOSITOR_PID" &>/dev/null; then
     exit 1
 fi
 
-# Step 3: Wait for Wayland socket
+# --- Step 5: Wait for Wayland socket ---
 WAYLAND_SOCKET=""
 for i in $(seq 1 30); do
     for sock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
@@ -71,7 +148,7 @@ fi
 export WAYLAND_DISPLAY=$(basename "$WAYLAND_SOCKET")
 echo "Wayland compositor ready on WAYLAND_DISPLAY=$WAYLAND_DISPLAY (socket: $WAYLAND_SOCKET)"
 
-# Step 4: Start wayvnc
+# --- Step 6: Start wayvnc ---
 echo "Starting wayvnc VNC server on 0.0.0.0:5900..."
 > "$VNC_LOG"
 XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
@@ -87,11 +164,14 @@ else
     echo "wayvnc VNC server is ACTIVE on port 5900 (PID $VNC_PID)."
 fi
 
-# Step 5: Start terminal (foot)
-echo "Starting terminal (foot)..."
+# --- Step 7: Start terminal with GPU Acceleration (foot) ---
+echo "Starting terminal (foot) with GPU acceleration..."
 > "$FOOT_LOG"
 XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
 WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+GALLIUM_DRIVER="$GALLIUM_DRIVER" \
+MESA_GL_VERSION_OVERRIDE="$MESA_GL_VERSION_OVERRIDE" \
+MESA_GLSL_VERSION_OVERRIDE="$MESA_GLSL_VERSION_OVERRIDE" \
     foot &> "$FOOT_LOG" &
 FOOT_PID=$!
 
@@ -105,7 +185,9 @@ fi
 
 echo ""
 echo "=== Desktop Session is Ready ==="
-echo "Connect your VNC client to: 127.0.0.1:5900 (or localhost:5900)"
+echo "GPU Acceleration : $DETECTED_GPU ($ACCEL_TYPE)"
+echo "Driver Backend   : ${GALLIUM_DRIVER:-none}"
+echo "Connect VNC to   : 127.0.0.1:5900 (or localhost:5900)"
 echo "Press Ctrl+C to stop the session."
 echo ""
 

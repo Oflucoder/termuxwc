@@ -32,8 +32,15 @@ A native, high-performance **SwayWM-grade tiling Wayland compositor** built from
   - **Layer-Shell** (`zwlr_layer_shell_v1`): Support for status bars (`waybar`), wallpapers (`swaybg`, `wpaperd`), and desktop notifications.
   - **Virtual Input**: Full integration with `wlr-virtual-keyboard-v1` and `wlr-virtual-pointer-v1` for remote keyboard and pointer streaming.
   - **Screencopy**: Protocol support for `wayvnc` streaming and `grim` screenshots.
-- **CPU Software Rendering**:
-  - Built-in Pixman software renderer guarantees compatibility across all Android chipsets (Snapdragon, MediaTek, Exynos, Tensor).
+- **Universal GPU Hardware Acceleration Subsystem**:
+  - Automatically identifies any mobile GPU architecture:
+    - **Qualcomm Snapdragon** (Adreno 5xx, 6xx, 7xx, 8xx via `/dev/kgsl-3d0`)
+    - **ARM Mali** (Samsung Exynos, MediaTek Dimensity/Helio, Google Tensor, HiSilicon Kirin via `/dev/mali*`)
+    - **PowerVR / Rogue** (Unisoc, Rockchip via `/dev/pvr*`)
+    - **Samsung / AMD Xclipse** (RDNA2/RDNA3)
+    - **Linux Direct DRM Nodes** (`/dev/dri/renderD128`)
+  - Integrated VirGL hardware 3D bridge (`virgl_test_server_android --multi-clients`) offloads OpenGL/GLES calls directly to the host physical GPU (`GALLIUM_DRIVER=virpipe`).
+  - Pluggable compositor rendering (`-R auto|gles2|vulkan|pixman`) with automatic, graceful Pixman fallback.
 
 ---
 
@@ -194,6 +201,7 @@ termuxwc -w 1920 -h 1080 -s foot
 | `-h <height>` | Virtual display height in pixels | `720` |
 | `-s <command>` | Initial command to spawn on startup | `None` |
 | `-H` | Force headless backend mode | Auto |
+| `-R <renderer>` | Compositor renderer (`auto`, `gles2`, `vulkan`, `pixman`) | `auto` |
 
 ---
 

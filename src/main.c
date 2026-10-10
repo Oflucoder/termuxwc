@@ -38,7 +38,9 @@
 #include <wlr/backend.h>
 #include <wlr/backend/headless.h>
 #include <wlr/render/allocator.h>
+#include <wlr/render/pixman.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_data_device.h>
@@ -1462,8 +1464,10 @@ int main(int argc, char *argv[]) {
 	char *startup_cmd = NULL;
 	bool force_headless = false;
 
+	char *custom_renderer = NULL;
+
 	int opt;
-	while ((opt = getopt(argc, argv, "s:w:h:H")) != -1) {
+	while ((opt = getopt(argc, argv, "s:w:h:HR:")) != -1) {
 		switch (opt) {
 		case 's':
 			startup_cmd = optarg;
@@ -1479,10 +1483,17 @@ int main(int argc, char *argv[]) {
 		case 'H':
 			force_headless = true;
 			break;
+		case 'R':
+			custom_renderer = optarg;
+			break;
 		default:
-			fprintf(stderr, "Usage: %s [-s <cmd>] [-w <width>] [-h <height>] [-H (headless)]\n", argv[0]);
+			fprintf(stderr, "Usage: %s [-s <cmd>] [-w <width>] [-h <height>] [-H (headless)] [-R <auto|gles2|vulkan|pixman>]\n", argv[0]);
 			return 1;
 		}
+	}
+
+	if (custom_renderer) {
+		setenv("WLR_RENDERER", custom_renderer, 1);
 	}
 
 	setup_xdg_runtime_dir();
@@ -1495,7 +1506,7 @@ int main(int argc, char *argv[]) {
 	server.event_loop = wl_display_get_event_loop(server.wl_display);
 
 	if (!getenv("WLR_RENDERER")) {
-		setenv("WLR_RENDERER", "pixman", 0);
+		setenv("WLR_RENDERER", "auto", 0);
 	}
 
 	if (!force_headless) {
@@ -1515,11 +1526,18 @@ int main(int argc, char *argv[]) {
 
 	server.renderer = wlr_renderer_autocreate(server.backend);
 	if (!server.renderer) {
-		wlr_log(WLR_ERROR, "Failed to create wlr_renderer");
+		const char *req = getenv("WLR_RENDERER");
+		wlr_log(WLR_INFO, "Renderer '%s' not available headlessly; activating Pixman software renderer",
+			req ? req : "auto");
+		server.renderer = wlr_pixman_renderer_create();
+	}
+	if (!server.renderer) {
+		wlr_log(WLR_ERROR, "Failed to create any wlr_renderer");
 		return 1;
 	}
 
 	wlr_renderer_init_wl_display(server.renderer, server.wl_display);
+	wlr_linux_dmabuf_v1_create_with_renderer(server.wl_display, 4, server.renderer);
 
 	server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
 	if (!server.allocator) {
