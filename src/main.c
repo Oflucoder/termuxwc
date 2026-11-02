@@ -33,6 +33,9 @@
 #include <wlr/backend.h>
 #include <wlr/backend/headless.h>
 #include <wlr/backend/multi.h>
+#ifdef WLR_BACKEND_DRM
+#include <wlr/backend/drm.h>
+#endif
 #include <wlr/backend/wayland.h>
 #ifdef WLR_BACKEND_X11
 #include <wlr/backend/x11.h>
@@ -41,7 +44,10 @@
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
+#if WLR_VERSION_MAJOR > 0 || (WLR_VERSION_MAJOR == 0 && WLR_VERSION_MINOR >= 17)
 #include <wlr/types/wlr_fractional_scale_v1.h>
+#define TWC_HAS_FRACTIONAL_SCALE 1
+#endif
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_presentation_time.h>
@@ -136,13 +142,13 @@ int main(int argc, char *argv[]) {
 			custom_renderer = optarg;
 			break;
 		case 'b':
-			backend_name = optarg; // auto | wayland | x11 | headless
+			backend_name = optarg; // auto | drm | wayland | x11 | headless
 			break;
 		default:
 			fprintf(stderr,
 				"Usage: %s [-s <cmd>] [-w <width>] [-h <height>] [-r <fps>]\n"
 				"       [-H (headless)] [-R <auto|gles2|vulkan|pixman>]"
-				" [-b <auto|wayland|x11|headless>]\n", argv[0]);
+				" [-b <auto|drm|wayland|x11|headless>]\n", argv[0]);
 			return 1;
 		}
 	}
@@ -164,12 +170,26 @@ int main(int argc, char *argv[]) {
 		setenv("WLR_RENDERER", "auto", 0);
 	}
 
-	// --- Backend selection (Linux port) ---
+	// --- Backend selection (Linux port / HW acceleration paths) ---
 	// Inside Termux there is no parent display server, so autocreate falls
-	// back to the headless backend immediately (VNC via wayvnc). On a real
-	// Linux desktop we prefer nested Wayland (works under any session),
-	// then X11, then headless. Explicit choice via -b <backend>.
+	// back to the headless backend immediately (VNC via wayvnc). On real
+	// Linux: "-b drm" gives direct GPU rendering with KMS page flips (no
+	// VNC at all); otherwise we prefer nested Wayland (works under any
+	// session), then X11, then headless. Explicit choice via -b <backend>.
 	if (!force_headless) {
+#ifdef WLR_BACKEND_DRM
+		if (backend_name && strcmp(backend_name, "drm") == 0) {
+			// Native DRM/GBM backend: the compositor renders directly on the
+			// physical GPU and presents via KMS page flips. Needs a free DRM
+			// device (root or video/render group), no parent display server.
+			server.backend = wlr_drm_backend_create(server.event_loop, NULL, NULL);
+			if (!server.backend) {
+				wlr_log(WLR_ERROR, "DRM backend unavailable"
+					" (no free /dev/dri device or insufficient permissions)");
+				return 1;
+			}
+		} else
+#endif
 		if (backend_name && strcmp(backend_name, "wayland") == 0 &&
 		    getenv("WAYLAND_DISPLAY")) {
 			server.backend = wlr_wl_backend_create(server.event_loop, NULL);
@@ -187,6 +207,10 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	if (server.backend == NULL) {
+		if (backend_name) {
+			wlr_log(WLR_INFO, "Backend '%s' not available; falling back to headless",
+				backend_name);
+		}
 		wlr_log(WLR_INFO, "Creating headless backend (%dx%d)...",
 			server.default_width, server.default_height);
 		server.backend = wlr_headless_backend_create(server.event_loop);
@@ -228,7 +252,9 @@ int main(int argc, char *argv[]) {
 
 	wlr_primary_selection_v1_device_manager_create(server.wl_display);
 	wlr_xdg_activation_v1_create(server.wl_display);
+#ifdef TWC_HAS_FRACTIONAL_SCALE
 	wlr_fractional_scale_manager_v1_create(server.wl_display, 1);
+#endif
 	wlr_viewporter_create(server.wl_display);
 	wlr_xdg_decoration_manager_v1_create(server.wl_display);
 	wlr_text_input_manager_v3_create(server.wl_display);

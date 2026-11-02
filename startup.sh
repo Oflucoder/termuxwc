@@ -160,10 +160,15 @@ ninja -C build &>/dev/null || true
 
 # --- Step 5: Start compositor (Headless Wayland Compositor) ---
 TERMUXWC_FPS="${TERMUXWC_FPS:-120}"
+# Compositor renderer: pixman (CPU, most stable) or gles2 (hardware GPU via
+# the VirGL bridge above). Set TERMUXWC_RENDERER=gles2 for in-compositor HW
+# acceleration; termuxwc falls back to pixman automatically if EGL fails.
+TERMUXWC_RENDERER="${TERMUXWC_RENDERER:-pixman}"
 
 > "$LOG_FILE"
-echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless)..."
-XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER=pixman ./build/termuxwc -H -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless, renderer: $TERMUXWC_RENDERER)..."
+XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
+    ./build/termuxwc -H -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
 COMPOSITOR_PID=$!
 
 sleep 0.5

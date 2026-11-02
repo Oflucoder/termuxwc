@@ -193,6 +193,62 @@ source ~/.config/termuxwc/env
 * **Streamer**: `wayvnc` streaming directly over `0.0.0.0:5900` at full 120 FPS.
 * **Clients**: Connect from any VNC client (e.g. [AVNC](https://github.com/gstansev/AVNC) on Android at `127.0.0.1:5900` or remotely over LAN).
 
+---
+
+## GPU Acceleration Without VNC (In-App Direct Rendering)
+
+The VirGL bridge described above accelerates **client applications** (`foot`, games, video players) no matter how pixels reach the screen - it works identically with VNC, nested Wayland, or DRM. If you want the **compositor itself** to render on the physical GPU and display **without any VNC step**, there are three paths, ordered by speed:
+
+### Path 1 - Native DRM backend (bare-metal Linux, zero overhead)
+On real Linux (or Termux with root and an accessible `/dev/dri/renderD128`), wlroots' DRM backend makes termuxwc a KMS master: direct GBM/EGL rendering on the GPU, page-flip presentation, no capture, no encoding, no network.
+
+```bash
+# Run termuxwc directly on a free VT (no other session holding the display):
+sudo termuxwc            # autocreate picks DRM automatically
+# Force it explicitly:
+termuxwc -b drm
+```
+Note: `-b drm` is compiled in whenever wlroots exposes `wlr/backend/drm.h` (standard on Linux; absent in the Termux Android build). On Termux without root this option falls back to headless with a log message.
+
+Requirements: `/dev/dri/renderD128` readable (add the user to `video`/`render` groups or run as root), and no other compositor holding the DRM device.
+
+### Path 2 - Nested Wayland/X11 backend (no root, no VNC, GPU-accelerated)
+If your Android app can host a **native Wayland display** (a small embedded wlroots/mutter compositor shown in a SurfaceView, *Waydroid-shell* style) then termuxwc runs as a *window* on that parent compositor via `-b wayland`. The parent's own GL path presents the frames - this is exactly how wlroots compositors are hardware-accelerated without VNC on regular Linux.
+
+```bash
+# Inside whatever provides WAYLAND_DISPLAY:
+termuxwc -b wayland -R gles2
+GALLIUM_DRIVER=virpipe foot   # clients stay GPU accelerated via VirGL
+```
+Termux-only alternative (X11 window instead of Wayland, still no VNC):
+```bash
+termux-x11:X11 &
+DISPLAY=:0 termuxwc -b x11 -R gles2
+```
+
+### Path 3 - Zero-copy dmabuf capture for your own viewer app
+When pixels must be shipped into your own Android application (SurfaceView) without VNC, use the `zwlr_screencopy_manager_v1` global that termuxwc already exposes together with `zwp_linux_dmabuf_v1` (created from the GLES renderer at startup). With `-R gles2`, captured buffers are exported as **dmabufs** (AHardwareBuffer-backed on Adreno/Mali under Termux), so a small screencopy client inside your app can import them with `EGL_EXT_image_dma_buf_import` and blit straight onto the `NativeWindow` - one GPU-side copy, no JPEG/H.264 encode round-trip like wayvnc performs. This requires writing a few hundred lines of capture code in the app; the compositor side needs no changes.
+
+### Enabling the GLES2 renderer for the compositor headlessly
+By default `startup.sh` uses `WLR_RENDERER=pixman` (CPU) for maximum stability. To make the compositor's own scene graph render on the GPU through the VirGL bridge:
+
+```bash
+TERMUXWC_RENDERER=gles2 termuxwc-session
+```
+This sets `WLR_RENDERER=gles2`; if EGL/GLES initialization fails (bridge not running), termuxwc falls back to Pixman automatically - sessions never fail to start because of renderer choice. Verify with:
+```bash
+termuxwc-gpu-check          # shows active renderer and EGL strings
+glxinfo | grep -i opengl    # should report "virgl" / Turnip / ANGLE
+```
+
+| Setup | Compositor renderer | Presentation | Latency | Root needed |
+| :--- | :--- | :--- | :--- | :--- |
+| Headless + wayvnc (default) | pixman (CPU) | VNC TCP stream | ~30-60 ms | No |
+| Headless + gles2 + wayvnc | gles2 (VirGL -> GPU) | VNC TCP stream | ~20-40 ms | No |
+| Nested Wayland/X11 (`-b wayland`) | gles2 | Parent compositor | ~10 ms | No |
+| DRM (`-b drm`) | gles2 (GBM) | Page flip | <5 ms | Yes/groups |
+| Screencopy dmabuf -> SurfaceView | gles2 | Zero-copy import | ~5-10 ms | No |
+
 ### GPU Diagnostics & 3D Benchmark Tools
 `termuxwc` includes built-in diagnostic and benchmarking tools:
 ```bash
