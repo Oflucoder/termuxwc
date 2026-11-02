@@ -1,92 +1,113 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# termuxwc One-Click Installer for Termux (Android rootless)
+# termuxwc Installer — Termux (Android, rootless) and native Linux.
+#
+#   Termux:  bash install.sh          (pkg deps + build from source)
+#   Linux :  sudo ./install.sh        (apt/dnf deps + meson/ninja install)
+#
+# wayland-protocols is NOT fetched from the internet anymore: the required
+# protocol C sources are vendored under include/protocols/, so a plain git
+# clone is self-sufficient.
 set -e
-
-echo "=========================================================="
-echo "    termuxwc: SwayWM Tiling Compositor Installer"
-echo "=========================================================="
 
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IS_TERMUX=0
+case "$PREFIX" in
+  /data/data/com.termux/*) IS_TERMUX=1 ;;
+esac
 
-# 1. Install all required dependencies from Termux mirrors
-echo ">> Step 1/4: Installing required packages (Wayland, pixman, xkb, wayvnc, foot, virgl, vulkan)..."
-pkg update -y
-pkg install -y \
-    libwayland wayland-protocols \
-    libxkbcommon libpixman \
-    wayvnc foot virglrenderer-android curl tar dbus \
-    vulkan-loader-generic vulkan-tools \
-    mesa-vulkan-icd-swrast mesa-vulkan-icd-freedreno
+echo "=========================================================="
+if [ "$IS_TERMUX" = 1 ]; then
+    echo "  termuxwc installer — Termux/Android"
+    echo "=========================================================="
 
-# Purge swiftshader if present to prevent null pointer crashes on Wayland WSI
-pkg uninstall -y swiftshader 2>/dev/null || true
+    # --- Step 1: dependencies (all available in Termux repos) ---
+    echo ">> Step 1/3: Installing packages..."
+    pkg update -y
+    pkg install -y \
+        clang make cmake ninja meson pkg-config \
+        libwayland wayland-protocols wayland-utils \
+        libxkbcommon libpixman pixman grapheme-breaker \
+        libevicti libepoll-shim xmlto docbook-xsl \
+        mesa virglrenderer-android curl tar dbus git \
+        wayvnc foot
 
-# 2. Deploy prebuilt patched wlroots library and termuxwc binary
-echo ">> Step 2/4: Deploying precompiled binaries..."
-if [ -f "$SCRIPT_DIR/libwlroots-0.19.so" ] && [ -f "$SCRIPT_DIR/termuxwc" ]; then
-    # Local release bundle
-    cp -f "$SCRIPT_DIR/libwlroots-0.19.so" "$PREFIX/lib/"
-    cp -f "$SCRIPT_DIR/termuxwc" "$PREFIX/bin/"
-elif [ -f "$SCRIPT_DIR/dist/termuxwc-v0.4-aarch64/libwlroots-0.19.so" ]; then
-    # Cloned repo with dist folder
-    cp -f "$SCRIPT_DIR/dist/termuxwc-v0.4-aarch64/libwlroots-0.19.so" "$PREFIX/lib/"
-    cp -f "$SCRIPT_DIR/dist/termuxwc-v0.4-aarch64/termuxwc" "$PREFIX/bin/"
+    # wlroots 0.19 is not in Termux repos as a standalone package; it ships
+    # inside the 'termux-wlroots' meta or must be built. Try repo first,
+    # fall back to building it from upstream sources into $PREFIX.
+    if ! pkg-config --exists wlroots-0.19 2>/dev/null; then
+        echo ">> wlroots-0.19 not found in repos; building from source..."
+        TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+        git clone --depth 1 --branch 0.19.0 \
+            https://gitlab.freedesktop.org/wlroots/wlroots.git "$TMP/wlroots"
+        ( cd "$TMP/wlroots" \
+          && meson setup build --prefix="$PREFIX" \
+               -Dexamples=false -Dbackends=headless,wayland,drm \
+               -Drenderers=gles2,pixman \
+          && ninja -C build && ninja -C build install )
+    fi
+
+    # --- Step 2: build termuxwc ---
+    echo ">> Step 2/3: Building termuxwc from this checkout..."
+    cd "$SCRIPT_DIR"
+    rm -rf build
+    meson setup build --prefix="$PREFIX"
+    ninja -C build
+
+    # --- Step 3: deploy session script + config ---
+    echo ">> Step 3/3: Deploying termuxwc-session and default config..."
+    cp -f startup.sh "$PREFIX/bin/termuxwc-session"
+    chmod 755 "$PREFIX/bin/termuxwc-session"
+    [ -f build/termuxwc-cube ] && { cp -f build/termuxwc-cube "$PREFIX/bin/"; chmod 755 "$PREFIX/bin/termuxwc-cube"; }
+    mkdir -p "$HOME/.config/termuxwc"
+    [ -f "$HOME/.config/termuxwc/config" ] || cp "$SCRIPT_DIR/config" "$HOME/.config/termuxwc/config"
+
 else
-    # Download prebuilt tarball from GitHub Release
-    echo ">> Fetching prebuilt release package from GitHub..."
-    TMP_DIR=$(mktemp -d)
-    TAR_URL="https://github.com/Oflucoder/termuxwc/releases/download/v0.4/termuxwc-v0.4-aarch64.tar.gz"
-    if curl -sLf "$TAR_URL" -o "$TMP_DIR/release.tar.gz"; then
-        tar -xzf "$TMP_DIR/release.tar.gz" -C "$TMP_DIR"
-        cp -f "$TMP_DIR/libwlroots-0.19.so" "$PREFIX/lib/"
-        cp -f "$TMP_DIR/termuxwc" "$PREFIX/bin/"
-        rm -rf "$TMP_DIR"
-    elif [ -f "$SCRIPT_DIR/build/termuxwc" ]; then
-        cp -f "$SCRIPT_DIR/build/termuxwc" "$PREFIX/bin/"
+    echo "  termuxwc installer — Native Linux"
+    echo "=========================================================="
+
+    # --- Step 1: distro dependencies ---
+    echo ">> Step 1/3: Installing system packages..."
+    if command -v apt-get >/dev/null; then
+        sudo apt-get update
+        sudo apt-get install -y build-essential meson ninja-build pkg-config \
+            libwayland-dev wayland-protocols libwlroots-0.19-dev \
+            libxkbcommon-dev libpixman-1-dev libegl1-mesa-dev \
+            libgles2-mesa-dev libpng-dev dbus wayland-utils
+    elif command -v dnf >/dev/null; then
+        sudo dnf install -y gcc meson ninja-build pkgconf-pkg-config \
+            wayland-devel wayland-protocols-devel wlroots-devel \
+            libxkbcommon-devel pixman-devel mesa-libEGL-devel \
+            mesa-libGLES-devel libpng-devel dbus-devel
+    else
+        echo "WARNING: unknown package manager; ensure wlroots-0.19 dev files exist."
     fi
-fi
 
-chmod 755 "$PREFIX/lib/libwlroots-0.19.so" 2>/dev/null || true
-chmod 755 "$PREFIX/bin/termuxwc" 2>/dev/null || true
+    # --- Step 2: build & install ---
+    echo ">> Step 2/3: Building and installing to /usr/local..."
+    cd "$SCRIPT_DIR"
+    rm -rf build
+    meson setup build --prefix=/usr/local
+    ninja -C build
+    sudo ninja -C build install
 
-# 3. Deploy session supervisor script (termuxwc-session) and GPU diagnostic tools
-echo ">> Step 3/4: Setting up session supervisor and GPU tools..."
-if [ -f "$SCRIPT_DIR/startup.sh" ]; then
-    cp -f "$SCRIPT_DIR/startup.sh" "$PREFIX/bin/termuxwc-session"
-elif [ -f "$SCRIPT_DIR/dist/termuxwc-v0.4-aarch64/startup.sh" ]; then
-    cp -f "$SCRIPT_DIR/dist/termuxwc-v0.4-aarch64/startup.sh" "$PREFIX/bin/termuxwc-session"
-fi
-chmod 755 "$PREFIX/bin/termuxwc-session"
-
-if [ -f "$SCRIPT_DIR/bin/termuxwc-gpu-check" ]; then
-    cp -f "$SCRIPT_DIR/bin/termuxwc-gpu-check" "$PREFIX/bin/termuxwc-gpu-check"
-    chmod 755 "$PREFIX/bin/termuxwc-gpu-check"
-fi
-if [ -f "$SCRIPT_DIR/build/termuxwc-cube" ]; then
-    cp -f "$SCRIPT_DIR/build/termuxwc-cube" "$PREFIX/bin/termuxwc-cube"
-    chmod 755 "$PREFIX/bin/termuxwc-cube"
-fi
-
-# 4. Deploy default config
-echo ">> Step 4/4: Initializing configuration (~/.config/termuxwc/config)..."
-mkdir -p "$HOME/.config/termuxwc"
-if [ ! -f "$HOME/.config/termuxwc/config" ]; then
-    if [ -f "$SCRIPT_DIR/config" ]; then
-        cp "$SCRIPT_DIR/config" "$HOME/.config/termuxwc/config"
-    elif [ -f "$SCRIPT_DIR/dist/termuxwc-v0.4-aarch64/config" ]; then
-        cp "$SCRIPT_DIR/dist/termuxwc-v0.4-aarch64/config" "$HOME/.config/termuxwc/config"
-    fi
+    # --- Step 3: session script + config ---
+    echo ">> Step 3/3: Deploying termuxwc-session and default config..."
+    sudo cp -f startup.sh /usr/local/bin/termuxwc-session
+    sudo chmod 755 /usr/local/bin/termuxwc-session
+    mkdir -p "$HOME/.config/termuxwc"
+    [ -f "$HOME/.config/termuxwc/config" ] || cp "$SCRIPT_DIR/config" "$HOME/.config/termuxwc/config"
 fi
 
 echo ""
 echo "=========================================================="
-echo "           INSTALLATION FINISHED SUCCESSFULLY! 🎉"
+echo "           INSTALLATION FINISHED 🎉"
 echo "=========================================================="
 echo ""
-echo "To start your Sway-grade desktop session, simply run:"
-echo "    termuxwc-session"
-echo ""
-echo "Then connect your VNC client (AVNC on Android recommended) to:"
-echo "    127.0.0.1:5900"
+echo "Start a session:"
+echo "    termuxwc-session                          # headless (+VNC on Android)"
+echo "    TERMUXWC_BACKEND=termux-api termuxwc-session   # embedded, no VNC (Termux:API)"
+echo "    TERMUXWC_BACKEND=drm termuxwc-session     # native Linux console, no VNC"
+echo "    TERMUXWC_BACKEND=wayland TERMUXWC_DISPLAY=wayland-0 termuxwc-session"
+echo "                                              # nested window, no VNC"
 echo ""

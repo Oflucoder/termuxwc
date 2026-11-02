@@ -202,6 +202,10 @@ TERMUXWC_RENDERER="${TERMUXWC_RENDERER:-pixman}"
 #   drm                -> native Linux only: render directly on the GPU and
 #                         present via KMS page flips (no VNC, no X11)
 TERMUXWC_BACKEND="${TERMUXWC_BACKEND:-headless}"
+# Prefer a locally built binary (dev checkout), fall back to the installed one.
+if [ -x "./build/termuxwc" ]; then TWC_BIN="./build/termuxwc"
+elif [ -x "$PREFIX/bin/termuxwc" ]; then TWC_BIN="$PREFIX/bin/termuxwc"
+else echo "ERROR: termuxwc binary not found (run install.sh or meson/ninja build)."; exit 1; fi
 # Parent Wayland display for nested mode: name (e.g. weston-0) or full socket
 # path. Defaults to $WAYLAND_DISPLAY. Override via TERMUXWC_DISPLAY.
 TERMUXWC_DISPLAY="${TERMUXWC_DISPLAY:-$WAYLAND_DISPLAY}"
@@ -223,21 +227,28 @@ fi
 
 > "$LOG_FILE"
 if [ "$TERMUXWC_BACKEND" = "termux-api" ]; then
-    echo "Starting termuxwc EMBEDDED via Termux:API display server (renderer: $TERMUXWC_RENDERER, no VNC)..."
+    # Termux:API display session: the app exports TERMUX_DISPLAY (usually
+    # "wayland-1"). We connect to it as a client; our own sockets must use a
+    # different name, so temporarily clear WAYLAND_DISPLAY for the launch.
+    PARENT_API_DISPLAY="${TERMUXWC_DISPLAY:-${TERMUX_DISPLAY:-wayland-1}}"
+    NESTED_WAYLAND=1   # frames go straight to the app window -> skip wayvnc
+    echo "Starting termuxwc EMBEDDED via Termux:API display '$PARENT_API_DISPLAY' (renderer: $TERMUXWC_RENDERER, no VNC)..."
     XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
-        ./build/termuxwc -b termux-api ${TERMUXWC_DISPLAY:+-d "$TERMUXWC_DISPLAY"} -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+    WAYLAND_DISPLAY="" TERMUX_DISPLAY="$PARENT_API_DISPLAY" \
+        "${TWC_BIN:-./build/termuxwc}" -b termux-api -d "$PARENT_API_DISPLAY" -w "${TERMUXWC_WIDTH:-1280}" -h "${TERMUXWC_HEIGHT:-720}" -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
 elif [ "$TERMUXWC_BACKEND" = "drm" ]; then
+    NESTED_WAYLAND=1   # KMS page flips: no VNC needed
     echo "Starting termuxwc on native DRM/KMS (renderer: $TERMUXWC_RENDERER, no VNC)..."
     XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
-        ./build/termuxwc -b drm -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+        "$TWC_BIN" -b drm -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
 elif [ "$NESTED_WAYLAND" = "1" ]; then
     echo "Starting termuxwc NESTED on parent Wayland display '$TERMUXWC_DISPLAY' (renderer: $TERMUXWC_RENDERER, no VNC)..."
     XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
-        ./build/termuxwc -b wayland -d "$TERMUXWC_DISPLAY" -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+        "$TWC_BIN" -b wayland -d "$TERMUXWC_DISPLAY" -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
 else
     echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless, renderer: $TERMUXWC_RENDERER)..."
     XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
-        ./build/termuxwc -H -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+        "$TWC_BIN" -H -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
 fi
 COMPOSITOR_PID=$!
 
@@ -377,7 +388,13 @@ fi
 
 echo ""
 echo "=== Desktop Session is Ready ==="
-echo "Display Output   : Headless Wayland (wayvnc on 0.0.0.0:5900)"
+case "$TERMUXWC_BACKEND" in
+  termux-api) DISPLAY_DESC="Termux:API embedded window (no VNC)" ;;
+  wayland)    DISPLAY_DESC="Nested window on parent '$WAYLAND_DISPLAY_PARENT' (no VNC)" ;;
+  drm)        DISPLAY_DESC="Native DRM/KMS direct scanout (no VNC)" ;;
+  *)          DISPLAY_DESC="Headless Wayland (wayvnc on 0.0.0.0:5900)" ;;
+esac
+echo "Display Output   : $DISPLAY_DESC"
 echo "GPU Acceleration : $DETECTED_GPU ($ACCEL_TYPE)"
 echo "OpenGL Backend   : ${GALLIUM_DRIVER:-none}"
 echo "Vulkan Driver    : $VULKAN_DRIVER"

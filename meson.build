@@ -28,7 +28,13 @@ pixman_dep = dependency('pixman-1', required: true)
 # On Termux/Android none of these are available and the headless fallback is
 # used automatically, so they are all marked optional here.
 if cc.has_header('wlr/backend/drm.h')
-  add_project_arguments('-DWLR_BACKEND_DRM', language: 'c')
+  # Header presence alone is not enough: wlroots can be built without DRM
+  # support, in which case libwayland-server won't export the symbols.
+  # Linking wlr_drm_backend_create proves the backend actually exists.
+  if cc.has_function('wlr_drm_backend_create', dependencies: [wlroots_dep],
+                     prefix: '#include <wlr/backend/drm.h>')
+    add_project_arguments('-DWLR_BACKEND_DRM', language: 'c')
+  endif
 endif
 
 # Optional libpng support for GPU wallpaper rendering (background_image).
