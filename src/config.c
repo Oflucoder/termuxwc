@@ -27,6 +27,7 @@ void twc_load_or_create_config(struct termuxwc_config *cfg) {
 	twc_parse_hex_color("#7aa2f7", cfg->color_active_border);    // TokyoNight blue
 	twc_parse_hex_color("#3b4261", cfg->color_inactive_border);  // Subtle slate
 	twc_parse_hex_color("#16161e", cfg->color_background);       // Deep dark background
+	cfg->background_image[0] = '\0'; // no wallpaper by default
 
 	const char *home = getenv("HOME");
 	if (!home) return;
@@ -56,6 +57,9 @@ void twc_load_or_create_config(struct termuxwc_config *cfg) {
 			fprintf(f, "active_border #7aa2f7\n");
 			fprintf(f, "inactive_border #3b4261\n");
 			fprintf(f, "background #16161e\n");
+					fprintf(f, "\n# Optional PNG wallpaper (commented out).\n");
+					fprintf(f, "# Uploaded as a GPU texture and scaled to the output.\n");
+					fprintf(f, "#background_image ~/.config/termuxwc/wallpaper.png\n");
 			fclose(f);
 		}
 		return;
@@ -85,6 +89,9 @@ void twc_load_or_create_config(struct termuxwc_config *cfg) {
 				twc_parse_hex_color(val, cfg->color_inactive_border);
 			} else if (strcmp(key, "background") == 0) {
 				twc_parse_hex_color(val, cfg->color_background);
+						} else if (strcmp(key, "background_image") == 0) {
+							snprintf(cfg->background_image,
+									sizeof(cfg->background_image), "%s", val);
 			} else if (strcmp(key, "mod") == 0) {
 				if (strcmp(val, "Mod4") == 0) cfg->mod_mask = WLR_MODIFIER_LOGO;
 				else if (strcmp(val, "Mod1") == 0) cfg->mod_mask = WLR_MODIFIER_ALT;

@@ -36,6 +36,7 @@ struct termuxwc_config {
 	float color_active_border[4];
 	float color_inactive_border[4];
 	float color_background[4];
+	char background_image[512]; // optional PNG wallpaper path (empty = solid color)
 };
 
 struct termuxwc_toplevel {
@@ -111,6 +112,9 @@ struct termuxwc_keyboard {
 	struct wl_listener destroy;
 };
 
+/* Wallpaper scene node (opaque here; implemented in src/background.c). */
+struct twc_wallpaper;
+
 struct termuxwc_server {
 	struct wl_display *wl_display;
 	struct wl_event_loop *event_loop;
@@ -126,6 +130,7 @@ struct termuxwc_server {
 	struct wlr_scene_tree *scene_top;
 	struct wlr_scene_tree *scene_overlay;
 	struct wlr_scene_rect *background_rect;
+	struct twc_wallpaper *background; // image wallpaper node (may be NULL)
 
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
@@ -212,6 +217,12 @@ void twc_setup_layer_shell(struct termuxwc_server *server);
 
 /* xdg.c */
 void twc_setup_xdg_shell(struct termuxwc_server *server);
+
+/* termux_api.c */
+const char *twc_termux_api_resolve_display(const char *cli_display);
+struct wlr_backend *twc_termux_api_backend_create(
+		struct wl_event_loop *event_loop, const char *cli_display);
+void twc_termux_api_add_output(struct termuxwc_server *server);
 
 /* outputs.c */
 void twc_setup_outputs(struct termuxwc_server *server);

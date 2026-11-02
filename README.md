@@ -228,14 +228,14 @@ Log into any Wayland desktop (GNOME/KDE/sway/Weston session) and run termuxwc in
 # Inside a running Wayland session (WAYLAND_DISPLAY is already exported):
 TERMUXWC_BACKEND=wayland TERMUXWC_RENDERER=gles2 termuxwc-session
 # or directly:
-termuxwc -b wayland -R gles2
+termuxwc -b wayland -d weston-0 -R gles2   # -d: parent display (or export WAYLAND_DISPLAY)
 ```
-Clients launched from termuxwc's terminals stay inside termuxwc; termuxwc's frames go through the parent compositor's GLES path straight to the screen — GPU-composited presentation, no VNC codec step. (`TERMUXWC_BACKEND=wayland` refuses to start with a helpful message if no parent `WAYLAND_DISPLAY` exists.)
+Clients launched from termuxwc's terminals stay inside termuxwc; termuxwc's frames go through the parent compositor's GLES path straight to the screen — GPU-composited presentation, no VNC codec step. (`TERMUXWC_BACKEND=wayland` refuses to start with a helpful "display parameter is not set" message if neither `-d <display>` nor a parent `WAYLAND_DISPLAY`/`TERMUXWC_DISPLAY` is given.)
 
 **Recipe B — Weston on DRM (rooted device or Linux console) + termuxwc nested inside it:**
 ```bash
 weston --backend=headless &      # or --backend=drm on rooted devices
-WAYLAND_DISPLAY=weston-0 termuxwc -b wayland -R gles2
+WAYLAND_DISPLAY=weston-0 termuxwc -b wayland -R gles2   # or: termuxwc -b wayland -d weston-0
 ```
 
 **Recipe C — embed a minimal wlroots parent in your own app:**
@@ -345,10 +345,36 @@ ninja -C build install
 
 ---
 
+## Testing
+
+### Automated smoke test (no display, no VNC, no X11 required)
+
+```bash
+./tools/smoke-test.sh ./build/termuxwc
+```
+
+The script verifies, entirely headlessly:
+1. **Boot** — compositor starts with `-b headless`, creates its Wayland socket within 3 s and stays alive.
+2. **Protocol handshake** — `weston-info` / `wayland-info` binds and sees `wl_compositor`, `xdg_wm_base`, `wlr_layer_shell_v1` (and the `zwlr_screencopy_manager_v1` dmabuf capture path when present).
+3. **Client spawn** — a real Wayland app (`foot` or `weston-simple-egl`) is launched via `-s` and the compositor survives map/commit cycles.
+
+Install helpers for full coverage: `apt install weston-utils wayland-utils foot` (Linux) or `pkg install weston-utils foot` (Termux). The script exits non-zero on any failure, so it can be wired into CI.
+
+### Manual test matrix
+
+| What | How to test | Expected result |
+| :--- | :--- | :--- |
+| Headless + capture | `termuxwc -b headless &` then run your viewer against `$WAYLAND_DISPLAY` | Socket appears, frames commit only on scene change (`needs_frame` optimization) |
+| Nested Wayland (GPU, no root/VNC) | `weston --backend=headless &` → `WAYLAND_DISPLAY=weston-0 termuxwc -b wayland -R gles2` (equivalently `termuxwc -b wayland -d weston-0`) | termuxwc window shown by parent compositor, EGL/GLES2 active in log |
+| Native DRM (real GPU page flips) | Linux console session free of other compositors: `termuxwc -b drm` | KMS output lights up directly, no VNC/X11 involved |
+| Frame pump idle cost | `termuxwc -b headless &`, open no windows, `top -p $(pidof termuxwc)` | CPU ~0 % when nothing changes on screen |
+| Tiling / keybindings | Launch `foot`, Super+Enter spawns terminal, Super+j/k cycle tiles | Windows arrange without gaps |
+
 ## Command-Line Reference
 
 ```
-Usage: termuxwc [-s <cmd>] [-w <width>] [-h <height>] [-H] [-R <renderer>]
+Usage: termuxwc [-s <cmd>] [-w <width>] [-h <height>] [-r <fps>] [-R <renderer>]
+                [-b <auto|drm|wayland|headless>] [-d <display>]
 ```
 
 | Option | Description | Default |
@@ -356,8 +382,12 @@ Usage: termuxwc [-s <cmd>] [-w <width>] [-h <height>] [-H] [-R <renderer>]
 | `-s <cmd>` | Startup command executed once compositor is ready | `None` |
 | `-w <width>` | Virtual display width in pixels | `1280` |
 | `-h <height>` | Virtual display height in pixels | `720` |
-| `-H` | Force headless backend mode | Auto-detect |
+| `-r <fps>` | Frame clock rate for headless/nested outputs | `60` |
+| `-b <backend>` | Backend: `auto`, `drm`, `wayland`, `headless` (no X11) | `auto` |
 | `-R <renderer>` | Compositor renderer (`auto`, `gles2`, `vulkan`, `pixman`) | `auto` |
+| `-d <display>` | **Parent Wayland display for `-b wayland`** — a display name (`weston-0`) or a full socket path (`/dev/shm/wayland-1`). Required when `WAYLAND_DISPLAY` is not exported; without it termuxwc exits with "display parameter is not set" instead of silently falling back. | `$WAYLAND_DISPLAY` |
+
+> Note: `-d` refers to the *parent* compositor's display that termuxwc connects to as a client (nested mode). termuxwc's own socket is still auto-created and exported to its children as `WAYLAND_DISPLAY`.
 
 ---
 

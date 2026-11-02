@@ -18,6 +18,7 @@
 
 #include "termuxwc/server.h"
 #include "termuxwc/config.h"
+#include "termuxwc/background.h"
 
 #include <getopt.h>
 #include <signal.h>
@@ -37,7 +38,11 @@
 #include <wlr/backend/drm.h>
 #endif
 #include <wlr/backend/wayland.h>
+#include <wlr/render/egl.h>
+#include <wlr/render/gles.h>
+#include <wlr/render/interface.h>
 #include <wlr/render/pixman.h>
+#include <wlr/render/wlr_texture.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
@@ -111,11 +116,13 @@ int main(int argc, char *argv[]) {
 
 	char *startup_cmd = NULL;
 	char *backend_name = NULL;
+	char *display_name = NULL; // parent Wayland display for -b wayland
 	bool force_headless = false;
 	char *custom_renderer = NULL;
+	bool use_wl_output = false; // termux-api/wayland backend: create outputs ourselves
 
 	int opt;
-	while ((opt = getopt(argc, argv, "s:w:h:r:HR:b:")) != -1) {
+	while ((opt = getopt(argc, argv, "s:w:h:r:HR:b:d:")) != -1) {
 		switch (opt) {
 		case 's':
 			startup_cmd = optarg;
@@ -141,11 +148,14 @@ int main(int argc, char *argv[]) {
 		case 'b':
 			backend_name = optarg; // auto | drm | wayland | headless
 			break;
+		case 'd':
+			display_name = optarg; // parent display: "weston-0" or full socket path
+			break;
 		default:
 			fprintf(stderr,
 				"Usage: %s [-s <cmd>] [-w <width>] [-h <height>] [-r <fps>]\n"
 				"       [-H (headless)] [-R <auto|gles2|vulkan|pixman>]"
-				" [-b <auto|drm|wayland|headless>]\n", argv[0]);
+				" [-b <auto|drm|wayland|termux-api|headless>] [-d <display>]\n", argv[0]);
 			return 1;
 		}
 	}
@@ -187,11 +197,50 @@ int main(int argc, char *argv[]) {
 			}
 		} else
 #endif
-		if (backend_name && strcmp(backend_name, "wayland") == 0 &&
-		    getenv("WAYLAND_DISPLAY")) {
-			server.backend = wlr_wl_backend_create(server.event_loop, NULL);
-		}
-		else if (backend_name && strcmp(backend_name, "headless") == 0) {
+				if (backend_name && strcmp(backend_name, "wayland") == 0) {
+					// Parent Wayland display. Resolution order:
+					//   1. -d <name>         e.g. "-d wayland-0" (a running parent compositor)
+					//   2. -d <socket path>  e.g. "-d $XDG_RUNTIME_DIR/wayland-0" (basename used)
+					//   3. $WAYLAND_DISPLAY  inherited from a running desktop session
+					const char *parent = display_name ? display_name
+								  : getenv("WAYLAND_DISPLAY");
+					if (!parent) {
+						wlr_log(WLR_ERROR, "-b wayland: no parent display given."
+							" Pass -d <display> (e.g. -d wayland-0) or export"
+							" WAYLAND_DISPLAY before launching.");
+						return 1;
+					}
+					if (strchr(parent, '/')) {
+						// Full socket path: libwayland resolves only the basename
+						// against $XDG_RUNTIME_DIR.
+						const char *base = strrchr(parent, '/');
+						parent = base[1] != '\0' ? base + 1 : NULL;
+						if (!parent) {
+							wlr_log(WLR_ERROR, "-b wayland: invalid display path '%s'",
+								display_name);
+							return 1;
+						}
+					}
+					server.backend = wlr_wl_backend_create(server.event_loop, parent);
+					if (!server.backend) {
+						wlr_log(WLR_ERROR, "-b wayland: cannot connect to parent display"
+							" '%s' (is it running? XDG_RUNTIME_DIR=%s)",
+							parent, getenv("XDG_RUNTIME_DIR"));
+						return 1;
+					}
+					wlr_log(WLR_INFO, "Nested Wayland backend: parent display '%s'",
+						parent);
+					use_wl_output = true;
+				} else if (backend_name && strcmp(backend_name, "termux-api") == 0) {
+					// App-embedded display via Termux:API: termuxwc becomes a Wayland
+					// client of the display server hosted by the Termux app itself —
+					// no VNC, no root, EGL/dmabuf zero-copy presentation on the device
+					// GPU, frames go straight into the app window.
+					server.backend = twc_termux_api_backend_create(server.event_loop,
+						display_name);
+					if (!server.backend) return 1;
+					use_wl_output = true;
+				} else if (backend_name && strcmp(backend_name, "headless") == 0) {
 			server.backend = NULL; // handled by fallback below
 		} else {
 			server.backend = wlr_backend_autocreate(server.event_loop, NULL);
@@ -211,6 +260,12 @@ int main(int argc, char *argv[]) {
 		}
 		wlr_headless_add_output(server.backend,
 			server.default_width, server.default_height);
+	}
+
+	// Wayland-based backends (nested / Termux:API) start with zero outputs;
+	// we must explicitly create the windowed output(s) ourselves.
+	if (use_wl_output) {
+		twc_termux_api_add_output(&server);
 	}
 
 	server.renderer = wlr_renderer_autocreate(server.backend);
@@ -269,6 +324,23 @@ int main(int argc, char *argv[]) {
 		server.scene_background,
 		server.default_width, server.default_height,
 		server.config.color_background);
+
+	// Desktop background: wallpaper node (GPU texture) + solid-color rect.
+	twc_background_init(&server);
+	if (server.config.background_image[0] != '\0') {
+		char wp_path[512];
+		const char *home = getenv("HOME");
+		if (server.config.background_image[0] == '~' && home) {
+			snprintf(wp_path, sizeof(wp_path), "%s%s", home,
+				server.config.background_image + 1);
+		} else {
+			snprintf(wp_path, sizeof(wp_path), "%s",
+				server.config.background_image);
+		}
+		if (!twc_background_set_image(&server, wp_path)) {
+			wlr_log(WLR_INFO, "background: falling back to solid color");
+		}
+	}
 
 	// Subsystem wiring (see respective modules)
 	twc_setup_outputs(&server);

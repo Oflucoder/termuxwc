@@ -6,6 +6,7 @@
 #define _WLR_USE_UNSTABLE
 
 #include "termuxwc/server.h"
+#include "termuxwc/background.h"
 
 #include <stdlib.h>
 #include <time.h>
@@ -173,10 +174,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 		wlr_scene_output_create(server->scene, wlr_output);
 	wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
 
-	if (server->background_rect) {
-		wlr_scene_rect_set_size(server->background_rect,
-			wlr_output->width, wlr_output->height);
-	}
+	twc_background_resize(server, wlr_output->width, wlr_output->height);
 
 	twc_arrange_layers(server);
 	twc_arrange_all_workspaces(server);
