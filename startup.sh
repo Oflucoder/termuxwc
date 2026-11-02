@@ -164,20 +164,21 @@ TERMUXWC_FPS="${TERMUXWC_FPS:-120}"
 # the VirGL bridge above). Set TERMUXWC_RENDERER=gles2 for in-compositor HW
 # acceleration; termuxwc falls back to pixman automatically if EGL fails.
 TERMUXWC_RENDERER="${TERMUXWC_RENDERER:-pixman}"
-# Backend selection:
+# Backend selection (NO X11 anywhere in this project):
 #   headless (default) -> stream with wayvnc (VNC required for display)
 #   wayland            -> run as a WINDOW on a parent Wayland compositor
-#                         (e.g. weston --backend=x11) : NO VNC, GPU-presented
-# Termux:X11 is an X11 server, NOT a Wayland compositor; for the nested
-# Wayland path install weston:  pkg install weston
+#                         (e.g. weston --backend=headless or a desktop
+#                         session): NO VNC, GPU-presented
+#   drm                -> native Linux only: render directly on the GPU and
+#                         present via KMS page flips (no VNC, no X11)
 TERMUXWC_BACKEND="${TERMUXWC_BACKEND:-headless}"
 NESTED_WAYLAND=0
 
 if [ "$TERMUXWC_BACKEND" = "wayland" ]; then
     if [ -z "$WAYLAND_DISPLAY" ]; then
         echo "ERROR: TERMUXWC_BACKEND=wayland requires a PARENT Wayland compositor."
-        echo "       Termux:X11 alone does not provide one. Start Weston first:"
-        echo "         termux-x11:X11 & DISPLAY=:0 weston --backend=x11 &"
+        echo "       Start one first, e.g.:"
+        echo "         weston --backend=headless &   # or any real Wayland session"
         echo "       then re-run this session with TERMUXWC_BACKEND=wayland"
         exit 1
     fi

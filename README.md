@@ -188,7 +188,7 @@ source ~/.config/termuxwc/env
 ```
 
 ### Pure Wayland & WayVNC Streaming Architecture
-`termuxwc` is a pure native Wayland compositor. It operates completely independently without `termux-x11`:
+`termuxwc` is a pure native Wayland compositor. It operates completely independently of any X11 server — no X11 is used or supported anywhere in the pipeline:
 * **Compositor**: Headless `termuxwc -H -r 120` running natively in Termux userspace.
 * **Streamer**: `wayvnc` streaming directly over `0.0.0.0:5900` at full 120 FPS.
 * **Clients**: Connect from any VNC client (e.g. [AVNC](https://github.com/gstansev/AVNC) on Android at `127.0.0.1:5900` or remotely over LAN).
@@ -213,40 +213,33 @@ Note: `-b drm` is compiled in whenever wlroots exposes `wlr/backend/drm.h` (stan
 Requirements: `/dev/dri/renderD128` readable (add the user to `video`/`render` groups or run as root), and no other compositor holding the DRM device.
 
 ### Path 2 - Nested Wayland backend (no root, no VNC, GPU-accelerated)
-> **Important:** Termux:X11 is an **X11 server**, not a Wayland compositor — it cannot serve as the parent for `-b wayland`. You need a real Wayland display host. Options, best-first:
+> **Important:** This project does **not** support X11 in any form — there is no X11 backend, and Termux:X11 (an X11 server) cannot be used anywhere in the pipeline. Everything is pure Wayland end-to-end. The nested path requires a real **Wayland** display host as parent. Options, best-first:
 
 | Parent display host | What it is | How to get it |
 | :--- | :--- | :--- |
-| **[Weston](https://gitlab.freedesktop.org/wlroots/weston)** *(recommended)* | Reference Wayland compositor; renders on X11, headless, or DRM | `pkg install weston xwayland` in Termux |
-| **Cage** | Single-window kiosk wlroots compositor, runs nested on X11/Wayland | `pkg install cage` (if available) / build from source |
+| **[Weston](https://gitlab.freedesktop.org/wlroots/weston)** *(recommended)* | Reference Wayland compositor; runs on DRM, headless, or nested under another Wayland session | `pkg install weston` in Termux / distro package on Linux |
+| **Cage** | Single-window kiosk wlroots compositor, runs on DRM or nested Wayland | `pkg install cage` (if available) / build from source |
 | **Your own app (SurfaceView)** | Embed a tiny wlroots/XCB parent compositor in your Android app (*Waydroid-shell* style), expose `WAYLAND_DISPLAY` | Custom dev — see Path 3 for the lighter dmabuf variant |
 | **GNOME / KDE / wlroots desktop** | Any native Wayland session on a Linux PC (or chroot/Proot distro) | Log into a Wayland session and run termuxwc inside it |
 
-**Recipe A — Weston nested inside Termux:X11 (works today, no root):**
-Weston takes an X11 window as its output, but everything *inside* that window is a real Wayland display. `startup.sh` supports this natively via `TERMUXWC_BACKEND`:
+**Recipe A — Native Wayland session on Linux (the standard no-root, no-VNC setup):**
+Log into any Wayland desktop (GNOME/KDE/sway/Weston session) and run termuxwc inside it — it opens as a normal Wayland window:
 ```bash
-# Terminal 1: parent Wayland display (Weston renders into a Termux:X11 window)
-termux-x11:X11 &                 # X11 server -> shows Weston's window
-export DISPLAY=:0
-export XDG_RUNTIME_DIR=$PREFIX/var/cache/termuxwc
-weston --backend=x11 --width=1280 --height=720 &   # provides WAYLAND_DISPLAY=weston-0
-
-# Terminal 2: termuxwc runs as a *windowed* Wayland client in Weston - NO wayvnc started
-WAYLAND_DISPLAY=weston-0 TERMUXWC_BACKEND=wayland TERMUXWC_RENDERER=gles2 termuxwc-session
+# Inside a running Wayland session (WAYLAND_DISPLAY is already exported):
+TERMUXWC_BACKEND=wayland TERMUXWC_RENDERER=gles2 termuxwc-session
+# or directly:
+termuxwc -b wayland -R gles2
 ```
-Clients launched from termuxwc's terminals stay inside termuxwc; termuxwc's frames go through Weston's GLES path onto the X11 window — GPU-composited presentation, no VNC codec step. (`TERMUXWC_BACKEND=wayland` refuses to start with a helpful message if no parent `WAYLAND_DISPLAY` exists.)
+Clients launched from termuxwc's terminals stay inside termuxwc; termuxwc's frames go through the parent compositor's GLES path straight to the screen — GPU-composited presentation, no VNC codec step. (`TERMUXWC_BACKEND=wayland` refuses to start with a helpful message if no parent `WAYLAND_DISPLAY` exists.)
 
-**Recipe B — Weston headless + your app imports Weston's output:**
+**Recipe B — Weston on DRM (rooted device or Linux console) + termuxwc nested inside it:**
 ```bash
 weston --backend=headless &      # or --backend=drm on rooted devices
 WAYLAND_DISPLAY=weston-0 termuxwc -b wayland -R gles2
 ```
 
-**Recipe C — native Wayland session on Linux/PC:**
-```bash
-# Logged into GNOME/KDE on Wayland (WAYLAND_DISPLAY already set):
-termuxwc -b wayland -R gles2
-```
+**Recipe C — embed a minimal wlroots parent in your own app:**
+Ship a tiny wlroots-based host compositor (Weston/Cage work out of the box) inside the app process space, expose its socket via `WAYLAND_DISPLAY`, then launch `termuxwc -b wayland` against it. No X11 layer exists anywhere in this chain.
 
 In all cases add `GALLIUM_DRIVER=virpipe` (or the Turnip/ANGLE env from the VirGL section) so client apps keep GPU acceleration through the bridge.
 
@@ -269,7 +262,7 @@ glxinfo | grep -i opengl    # should report "virgl" / Turnip / ANGLE
 | :--- | :--- | :--- | :--- | :--- |
 | Headless + wayvnc (default) | pixman (CPU) | VNC TCP stream | ~30-60 ms | No |
 | Headless + gles2 + wayvnc | gles2 (VirGL -> GPU) | VNC TCP stream | ~20-40 ms | No |
-| Nested Wayland/X11 (`-b wayland`) | gles2 | Parent compositor | ~10 ms | No |
+| Nested Wayland (`-b wayland`) | gles2 | Parent Wayland compositor | ~10 ms | No |
 | DRM (`-b drm`) | gles2 (GBM) | Page flip | <5 ms | Yes/groups |
 | Screencopy dmabuf -> SurfaceView | gles2 | Zero-copy import | ~5-10 ms | No |
 

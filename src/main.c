@@ -37,9 +37,6 @@
 #include <wlr/backend/drm.h>
 #endif
 #include <wlr/backend/wayland.h>
-#ifdef WLR_BACKEND_X11
-#include <wlr/backend/x11.h>
-#endif
 #include <wlr/render/pixman.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
@@ -142,13 +139,13 @@ int main(int argc, char *argv[]) {
 			custom_renderer = optarg;
 			break;
 		case 'b':
-			backend_name = optarg; // auto | drm | wayland | x11 | headless
+			backend_name = optarg; // auto | drm | wayland | headless
 			break;
 		default:
 			fprintf(stderr,
 				"Usage: %s [-s <cmd>] [-w <width>] [-h <height>] [-r <fps>]\n"
 				"       [-H (headless)] [-R <auto|gles2|vulkan|pixman>]"
-				" [-b <auto|drm|wayland|x11|headless>]\n", argv[0]);
+				" [-b <auto|drm|wayland|headless>]\n", argv[0]);
 			return 1;
 		}
 	}
@@ -175,7 +172,7 @@ int main(int argc, char *argv[]) {
 	// back to the headless backend immediately (VNC via wayvnc). On real
 	// Linux: "-b drm" gives direct GPU rendering with KMS page flips (no
 	// VNC at all); otherwise we prefer nested Wayland (works under any
-	// session), then X11, then headless. Explicit choice via -b <backend>.
+	// session), then headless. Explicit choice via -b <backend>.
 	if (!force_headless) {
 #ifdef WLR_BACKEND_DRM
 		if (backend_name && strcmp(backend_name, "drm") == 0) {
@@ -194,12 +191,6 @@ int main(int argc, char *argv[]) {
 		    getenv("WAYLAND_DISPLAY")) {
 			server.backend = wlr_wl_backend_create(server.event_loop, NULL);
 		}
-#ifdef WLR_BACKEND_X11
-		else if (backend_name && strcmp(backend_name, "x11") == 0 &&
-		         getenv("DISPLAY")) {
-			server.backend = wlr_x11_backend_create(server.event_loop, NULL);
-		}
-#endif
 		else if (backend_name && strcmp(backend_name, "headless") == 0) {
 			server.backend = NULL; // handled by fallback below
 		} else {

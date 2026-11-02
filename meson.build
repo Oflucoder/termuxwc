@@ -22,7 +22,8 @@ pixman_dep = dependency('pixman-1', required: true)
 
 # Optional backends for the native Linux port:
 #   - DRM backend works on bare-metal Linux consoles (auto-detected by wlroots)
-#   - Wayland/X11 backends enable nested sessions (termuxwc inside a desktop)
+#   - Wayland backend enables nested sessions (termuxwc inside a Wayland desktop)
+#   - No X11 backend: this project is pure Wayland by design
 # On Termux/Android none of these are available and the headless fallback is
 # used automatically, so they are all marked optional here.
 if cc.has_header('wlr/backend/drm.h')
