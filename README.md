@@ -188,10 +188,83 @@ source ~/.config/termuxwc/env
 ```
 
 ### Pure Wayland & WayVNC Streaming Architecture
-`termuxwc` is a pure native Wayland compositor. It operates completely independently without `termux-x11`:
+`termuxwc` is a pure native Wayland compositor. It operates completely independently of any X11 server — no X11 is used or supported anywhere in the pipeline:
 * **Compositor**: Headless `termuxwc -H -r 120` running natively in Termux userspace.
 * **Streamer**: `wayvnc` streaming directly over `0.0.0.0:5900` at full 120 FPS.
 * **Clients**: Connect from any VNC client (e.g. [AVNC](https://github.com/gstansev/AVNC) on Android at `127.0.0.1:5900` or remotely over LAN).
+
+---
+
+## GPU Acceleration Without VNC (In-App Direct Rendering)
+
+The VirGL bridge described above accelerates **client applications** (`foot`, games, video players) no matter how pixels reach the screen - it works identically with VNC, nested Wayland, or DRM. If you want the **compositor itself** to render on the physical GPU and display **without any VNC step**, there are three paths, ordered by speed:
+
+### Path 1 - Native DRM backend (bare-metal Linux, zero overhead)
+On real Linux (or Termux with root and an accessible `/dev/dri/renderD128`), wlroots' DRM backend makes termuxwc a KMS master: direct GBM/EGL rendering on the GPU, page-flip presentation, no capture, no encoding, no network.
+
+```bash
+# Run termuxwc directly on a free VT (no other session holding the display):
+sudo termuxwc            # autocreate picks DRM automatically
+# Force it explicitly:
+termuxwc -b drm
+```
+Note: `-b drm` is compiled in whenever wlroots exposes `wlr/backend/drm.h` (standard on Linux; absent in the Termux Android build). On Termux without root this option falls back to headless with a log message.
+
+Requirements: `/dev/dri/renderD128` readable (add the user to `video`/`render` groups or run as root), and no other compositor holding the DRM device.
+
+### Path 2 - Nested Wayland backend (no root, no VNC, GPU-accelerated)
+> **Important:** This project does **not** support X11 in any form — there is no X11 backend, and Termux:X11 (an X11 server) cannot be used anywhere in the pipeline. Everything is pure Wayland end-to-end. The nested path requires a real **Wayland** display host as parent. Options, best-first:
+
+| Parent display host | What it is | How to get it |
+| :--- | :--- | :--- |
+| **[Weston](https://gitlab.freedesktop.org/wlroots/weston)** *(recommended)* | Reference Wayland compositor; runs on DRM, headless, or nested under another Wayland session | `pkg install weston` in Termux / distro package on Linux |
+| **Cage** | Single-window kiosk wlroots compositor, runs on DRM or nested Wayland | `pkg install cage` (if available) / build from source |
+| **Your own app (SurfaceView)** | Embed a tiny wlroots/XCB parent compositor in your Android app (*Waydroid-shell* style), expose `WAYLAND_DISPLAY` | Custom dev — see Path 3 for the lighter dmabuf variant |
+| **GNOME / KDE / wlroots desktop** | Any native Wayland session on a Linux PC (or chroot/Proot distro) | Log into a Wayland session and run termuxwc inside it |
+
+**Recipe A — Native Wayland session on Linux (the standard no-root, no-VNC setup):**
+Log into any Wayland desktop (GNOME/KDE/sway/Weston session) and run termuxwc inside it — it opens as a normal Wayland window:
+```bash
+# Inside a running Wayland session (WAYLAND_DISPLAY is already exported):
+TERMUXWC_BACKEND=wayland TERMUXWC_RENDERER=gles2 termuxwc-session
+# or directly:
+termuxwc -b wayland -R gles2
+```
+Clients launched from termuxwc's terminals stay inside termuxwc; termuxwc's frames go through the parent compositor's GLES path straight to the screen — GPU-composited presentation, no VNC codec step. (`TERMUXWC_BACKEND=wayland` refuses to start with a helpful message if no parent `WAYLAND_DISPLAY` exists.)
+
+**Recipe B — Weston on DRM (rooted device or Linux console) + termuxwc nested inside it:**
+```bash
+weston --backend=headless &      # or --backend=drm on rooted devices
+WAYLAND_DISPLAY=weston-0 termuxwc -b wayland -R gles2
+```
+
+**Recipe C — embed a minimal wlroots parent in your own app:**
+Ship a tiny wlroots-based host compositor (Weston/Cage work out of the box) inside the app process space, expose its socket via `WAYLAND_DISPLAY`, then launch `termuxwc -b wayland` against it. No X11 layer exists anywhere in this chain.
+
+In all cases add `GALLIUM_DRIVER=virpipe` (or the Turnip/ANGLE env from the VirGL section) so client apps keep GPU acceleration through the bridge.
+
+### Path 3 - Zero-copy dmabuf capture for your own viewer app
+When pixels must be shipped into your own Android application (SurfaceView) without VNC, use the `zwlr_screencopy_manager_v1` global that termuxwc already exposes together with `zwp_linux_dmabuf_v1` (created from the GLES renderer at startup). With `-R gles2`, captured buffers are exported as **dmabufs** (AHardwareBuffer-backed on Adreno/Mali under Termux), so a small screencopy client inside your app can import them with `EGL_EXT_image_dma_buf_import` and blit straight onto the `NativeWindow` - one GPU-side copy, no JPEG/H.264 encode round-trip like wayvnc performs. This requires writing a few hundred lines of capture code in the app; the compositor side needs no changes.
+
+### Enabling the GLES2 renderer for the compositor headlessly
+By default `startup.sh` uses `WLR_RENDERER=pixman` (CPU) for maximum stability. To make the compositor's own scene graph render on the GPU through the VirGL bridge:
+
+```bash
+TERMUXWC_RENDERER=gles2 termuxwc-session
+```
+This sets `WLR_RENDERER=gles2`; if EGL/GLES initialization fails (bridge not running), termuxwc falls back to Pixman automatically - sessions never fail to start because of renderer choice. Verify with:
+```bash
+termuxwc-gpu-check          # shows active renderer and EGL strings
+glxinfo | grep -i opengl    # should report "virgl" / Turnip / ANGLE
+```
+
+| Setup | Compositor renderer | Presentation | Latency | Root needed |
+| :--- | :--- | :--- | :--- | :--- |
+| Headless + wayvnc (default) | pixman (CPU) | VNC TCP stream | ~30-60 ms | No |
+| Headless + gles2 + wayvnc | gles2 (VirGL -> GPU) | VNC TCP stream | ~20-40 ms | No |
+| Nested Wayland (`-b wayland`) | gles2 | Parent Wayland compositor | ~10 ms | No |
+| DRM (`-b drm`) | gles2 (GBM) | Page flip | <5 ms | Yes/groups |
+| Screencopy dmabuf -> SurfaceView | gles2 | Zero-copy import | ~5-10 ms | No |
 
 ### GPU Diagnostics & 3D Benchmark Tools
 `termuxwc` includes built-in diagnostic and benchmarking tools:
