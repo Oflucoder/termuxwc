@@ -212,19 +212,43 @@ Note: `-b drm` is compiled in whenever wlroots exposes `wlr/backend/drm.h` (stan
 
 Requirements: `/dev/dri/renderD128` readable (add the user to `video`/`render` groups or run as root), and no other compositor holding the DRM device.
 
-### Path 2 - Nested Wayland/X11 backend (no root, no VNC, GPU-accelerated)
-If your Android app can host a **native Wayland display** (a small embedded wlroots/mutter compositor shown in a SurfaceView, *Waydroid-shell* style) then termuxwc runs as a *window* on that parent compositor via `-b wayland`. The parent's own GL path presents the frames - this is exactly how wlroots compositors are hardware-accelerated without VNC on regular Linux.
+### Path 2 - Nested Wayland backend (no root, no VNC, GPU-accelerated)
+> **Important:** Termux:X11 is an **X11 server**, not a Wayland compositor — it cannot serve as the parent for `-b wayland`. You need a real Wayland display host. Options, best-first:
 
+| Parent display host | What it is | How to get it |
+| :--- | :--- | :--- |
+| **[Weston](https://gitlab.freedesktop.org/wlroots/weston)** *(recommended)* | Reference Wayland compositor; renders on X11, headless, or DRM | `pkg install weston xwayland` in Termux |
+| **Cage** | Single-window kiosk wlroots compositor, runs nested on X11/Wayland | `pkg install cage` (if available) / build from source |
+| **Your own app (SurfaceView)** | Embed a tiny wlroots/XCB parent compositor in your Android app (*Waydroid-shell* style), expose `WAYLAND_DISPLAY` | Custom dev — see Path 3 for the lighter dmabuf variant |
+| **GNOME / KDE / wlroots desktop** | Any native Wayland session on a Linux PC (or chroot/Proot distro) | Log into a Wayland session and run termuxwc inside it |
+
+**Recipe A — Weston nested inside Termux:X11 (works today, no root):**
+Weston takes an X11 window as its output, but everything *inside* that window is a real Wayland display. `startup.sh` supports this natively via `TERMUXWC_BACKEND`:
 ```bash
-# Inside whatever provides WAYLAND_DISPLAY:
+# Terminal 1: parent Wayland display (Weston renders into a Termux:X11 window)
+termux-x11:X11 &                 # X11 server -> shows Weston's window
+export DISPLAY=:0
+export XDG_RUNTIME_DIR=$PREFIX/var/cache/termuxwc
+weston --backend=x11 --width=1280 --height=720 &   # provides WAYLAND_DISPLAY=weston-0
+
+# Terminal 2: termuxwc runs as a *windowed* Wayland client in Weston - NO wayvnc started
+WAYLAND_DISPLAY=weston-0 TERMUXWC_BACKEND=wayland TERMUXWC_RENDERER=gles2 termuxwc-session
+```
+Clients launched from termuxwc's terminals stay inside termuxwc; termuxwc's frames go through Weston's GLES path onto the X11 window — GPU-composited presentation, no VNC codec step. (`TERMUXWC_BACKEND=wayland` refuses to start with a helpful message if no parent `WAYLAND_DISPLAY` exists.)
+
+**Recipe B — Weston headless + your app imports Weston's output:**
+```bash
+weston --backend=headless &      # or --backend=drm on rooted devices
+WAYLAND_DISPLAY=weston-0 termuxwc -b wayland -R gles2
+```
+
+**Recipe C — native Wayland session on Linux/PC:**
+```bash
+# Logged into GNOME/KDE on Wayland (WAYLAND_DISPLAY already set):
 termuxwc -b wayland -R gles2
-GALLIUM_DRIVER=virpipe foot   # clients stay GPU accelerated via VirGL
 ```
-Termux-only alternative (X11 window instead of Wayland, still no VNC):
-```bash
-termux-x11:X11 &
-DISPLAY=:0 termuxwc -b x11 -R gles2
-```
+
+In all cases add `GALLIUM_DRIVER=virpipe` (or the Turnip/ANGLE env from the VirGL section) so client apps keep GPU acceleration through the bridge.
 
 ### Path 3 - Zero-copy dmabuf capture for your own viewer app
 When pixels must be shipped into your own Android application (SurfaceView) without VNC, use the `zwlr_screencopy_manager_v1` global that termuxwc already exposes together with `zwp_linux_dmabuf_v1` (created from the GLES renderer at startup). With `-R gles2`, captured buffers are exported as **dmabufs** (AHardwareBuffer-backed on Adreno/Mali under Termux), so a small screencopy client inside your app can import them with `EGL_EXT_image_dma_buf_import` and blit straight onto the `NativeWindow` - one GPU-side copy, no JPEG/H.264 encode round-trip like wayvnc performs. This requires writing a few hundred lines of capture code in the app; the compositor side needs no changes.

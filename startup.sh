@@ -158,17 +158,45 @@ export WLR_NO_HARDWARE_CURSORS="1"
 echo "Checking compositor binary..."
 ninja -C build &>/dev/null || true
 
-# --- Step 5: Start compositor (Headless Wayland Compositor) ---
+# --- Step 5: Start compositor ---
 TERMUXWC_FPS="${TERMUXWC_FPS:-120}"
 # Compositor renderer: pixman (CPU, most stable) or gles2 (hardware GPU via
 # the VirGL bridge above). Set TERMUXWC_RENDERER=gles2 for in-compositor HW
 # acceleration; termuxwc falls back to pixman automatically if EGL fails.
 TERMUXWC_RENDERER="${TERMUXWC_RENDERER:-pixman}"
+# Backend selection:
+#   headless (default) -> stream with wayvnc (VNC required for display)
+#   wayland            -> run as a WINDOW on a parent Wayland compositor
+#                         (e.g. weston --backend=x11) : NO VNC, GPU-presented
+# Termux:X11 is an X11 server, NOT a Wayland compositor; for the nested
+# Wayland path install weston:  pkg install weston
+TERMUXWC_BACKEND="${TERMUXWC_BACKEND:-headless}"
+NESTED_WAYLAND=0
+
+if [ "$TERMUXWC_BACKEND" = "wayland" ]; then
+    if [ -z "$WAYLAND_DISPLAY" ]; then
+        echo "ERROR: TERMUXWC_BACKEND=wayland requires a PARENT Wayland compositor."
+        echo "       Termux:X11 alone does not provide one. Start Weston first:"
+        echo "         termux-x11:X11 & DISPLAY=:0 weston --backend=x11 &"
+        echo "       then re-run this session with TERMUXWC_BACKEND=wayland"
+        exit 1
+    fi
+    NESTED_WAYLAND=1
+    # Nested sockets live in the parent's runtime dir; keep ours separate so
+    # termuxwc's own clients don't collide with weston's socket numbering.
+    export WAYLAND_DISPLAY_PARENT="$WAYLAND_DISPLAY"
+fi
 
 > "$LOG_FILE"
-echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless, renderer: $TERMUXWC_RENDERER)..."
-XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
-    ./build/termuxwc -H -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+if [ "$NESTED_WAYLAND" = "1" ]; then
+    echo "Starting termuxwc NESTED on parent Wayland display '$WAYLAND_DISPLAY' (renderer: $TERMUXWC_RENDERER, no VNC)..."
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
+        ./build/termuxwc -b wayland -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+else
+    echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless, renderer: $TERMUXWC_RENDERER)..."
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
+        ./build/termuxwc -H -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+fi
 COMPOSITOR_PID=$!
 
 sleep 0.5
@@ -199,6 +227,14 @@ fi
 export WAYLAND_DISPLAY=$(basename "$WAYLAND_SOCKET")
 echo "Wayland compositor ready on WAYLAND_DISPLAY=$WAYLAND_DISPLAY (socket: $WAYLAND_SOCKET)"
 
+# In nested mode the child display must be reachable by clients while the
+# parent's WAYLAND_DISPLAY stays exported for termuxwc itself.
+if [ "$NESTED_WAYLAND" = "1" ]; then
+    export TERMUXWC_CHILD_DISPLAY="$WAYLAND_DISPLAY"
+    echo "Nested mode: termuxwc window is on '$WAYLAND_DISPLAY_PARENT'; its own clients use '$TERMUXWC_CHILD_DISPLAY'."
+    echo "To talk to the PARENT compositor from a shell, run: export WAYLAND_DISPLAY=\$WAYLAND_DISPLAY_PARENT"
+fi
+
 # Export and persist session environment profile (~/.config/termuxwc/env)
 ENV_FILE="$HOME/.config/termuxwc/env"
 mkdir -p "$(dirname "$ENV_FILE")"
@@ -227,10 +263,15 @@ export EGL_LOG_LEVEL="fatal"
 export VK_ICD_FILENAMES="$VK_ICD_FILENAMES"
 export LP_NUM_THREADS="$LP_NUM_THREADS"
 [ -n "$DBUS_SESSION_BUS_ADDRESS" ] && export DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
+[ -n "$TERMUXWC_CHILD_DISPLAY" ] && export TERMUXWC_CHILD_DISPLAY="$TERMUXWC_CHILD_DISPLAY"
+[ -n "$WAYLAND_DISPLAY_PARENT" ] && export WAYLAND_DISPLAY_PARENT="$WAYLAND_DISPLAY_PARENT"
 EOF
 chmod 600 "$ENV_FILE"
 
 # --- Step 7: Start wayvnc (VNC streaming server) ---
+if [ "$NESTED_WAYLAND" = "1" ]; then
+    echo "Nested Wayland mode: skipping wayvnc (frames shown directly by the parent compositor, no VNC)."
+else
 echo "Starting wayvnc VNC server (${TERMUXWC_FPS} FPS, GPU accelerated) on 0.0.0.0:5900..."
 > "$VNC_LOG"
 XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
@@ -244,6 +285,7 @@ if ! kill -0 "$VNC_PID" &>/dev/null; then
     cat "$VNC_LOG"
 else
     echo "wayvnc VNC server is ACTIVE on port 5900 (PID $VNC_PID)."
+fi
 fi
 
 # --- Step 8: Start terminal (foot) with full environment ---
