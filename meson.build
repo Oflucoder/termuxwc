@@ -28,7 +28,13 @@ pixman_dep = dependency('pixman-1', required: true)
 # On Termux/Android none of these are available and the headless fallback is
 # used automatically, so they are all marked optional here.
 if cc.has_header('wlr/backend/drm.h')
-  add_project_arguments('-DTWC_HAS_DRM', language: 'c')
+  add_project_arguments('-DWLR_BACKEND_DRM', language: 'c')
+endif
+
+# Optional libpng support for GPU wallpaper rendering (background_image).
+libpng_dep = dependency('libpng', required: false)
+if libpng_dep.found()
+  add_project_arguments('-DTWC_HAVE_LIBPNG', language: 'c')
 endif
 
 local_include = include_directories('include')
@@ -44,6 +50,8 @@ termuxwc_sources = [
   'src/inputs.c',
   'src/layers.c',
   'src/outputs.c',
+  'src/background.c',
+  'src/termux_api.c',
   'include/protocols/xdg-shell-protocol.c',
   'include/protocols/wlr-layer-shell-unstable-v1-protocol.c',
 ]
@@ -51,7 +59,7 @@ termuxwc_sources = [
 executable('termuxwc',
   termuxwc_sources,
   include_directories: [local_include, protocols_inc],
-  dependencies: [wlroots_dep, wayland_server_dep, wayland_server_client_dep, xkbcommon_dep, pixman_dep],
+  dependencies: [wlroots_dep, wayland_server_dep, wayland_server_client_dep, xkbcommon_dep, pixman_dep, libpng_dep],
   install: true,
 )
 

@@ -180,7 +180,19 @@ TERMUXWC_FPS=120 termuxwc-session
 ```
 
 ### Complete Graphical Environment & Session Profile
-`termuxwc-session` initializes a complete Linux graphical environment including a D-Bus session bus (`dbus-launch`), standard toolkit bridges (`GDK_BACKEND=wayland`, `QT_QPA_PLATFORM=wayland`, `SDL_VIDEODRIVER=wayland`), XDG directories, and GPU variables. 
+`termuxwc-session` initializes a complete Linux graphical environment including a D-Bus session bus (`dbus-launch`), standard toolkit bridges (`GDK_BACKEND=wayland`, `QT_QPA_PLATFORM=wayland`, `SDL_VIDEODRIVER=wayland`), XDG directories, and GPU variables.
+
+**App launch checklist (Firefox / Konsole / Electron):**
+1. Always start apps from a shell where the session profile is sourced:
+   ```bash
+   source ~/.config/termuxwc/env && firefox &
+   ```
+2. **Firefox "no DISPLAY was provided"**: Firefox still probes legacy display vars before Wayland. Either set `MOZ_ENABLE_WAYLAND=1` (already exported by the session) *and* make sure `WAYLAND_DISPLAY` points at termuxwc's own socket, or pass it explicitly:
+   ```bash
+   env WAYLAND_DISPLAY="$WAYLAND_DISPLAY" MOZ_ENABLE_WAYLAND=1 firefox &
+   ```
+3. **Konsole portal/D-Bus errors** (`freedesktop.portal.desktop ... wasn't provided with any .service files`): this means no `xdg-desktop-portal` backend is registered on the session bus. The session now drops a stub service file into `$PREFIX/share/dbus-1/services/` to silence it; for full functionality install a portal implementation if available (`pkg install xdg-desktop-portal`). The message itself is non-fatal — Konsole will run fine without portals.
+4. If you see portal errors anyway, ensure `DBUS_SESSION_BUS_ADDRESS` is exported (install `dbus`: `pkg install dbus`) — portal lookups fail without a session bus.
 
 All session environment variables are automatically written to `~/.config/termuxwc/env` on session start and can be sourced anywhere:
 ```bash

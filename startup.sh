@@ -3,6 +3,8 @@
 # --- termuxwc Universal Desktop & GPU Acceleration Supervisor ---
 echo "=== termuxwc Desktop Session with Universal GPU Acceleration ==="
 
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+
 export XDG_RUNTIME_DIR="/data/data/com.termux/files/usr/tmp/xdg-runtime"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
@@ -25,6 +27,7 @@ VNC_PID=
 FOOT_PID=
 VIRGL_PID=
 DBUS_PID=
+PORTAL_PID=
 
 cleanup() {
     echo ""
@@ -33,6 +36,7 @@ cleanup() {
     [ -n "$VNC_PID" ] && kill "$VNC_PID" &>/dev/null
     [ -n "$COMPOSITOR_PID" ] && kill "$COMPOSITOR_PID" &>/dev/null
     [ -n "$VIRGL_PID" ] && kill "$VIRGL_PID" &>/dev/null
+    [ -n "$PORTAL_PID" ] && kill "$PORTAL_PID" &>/dev/null
     [ -n "$DBUS_PID" ] && kill "$DBUS_PID" &>/dev/null
     rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayvnc* &>/dev/null || true
     rm -f /data/data/com.termux/files/usr/tmp/.virgl_test &>/dev/null || true
@@ -137,11 +141,37 @@ if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-launch &>/dev/null; the
     eval "$(dbus-launch --sh-syntax --exit-with-session 2>/dev/null)" || true
     [ -n "$DBUS_SESSION_BUS_PID" ] && DBUS_PID="$DBUS_SESSION_BUS_PID"
     echo ">> D-Bus session bus active (PID ${DBUS_PID:-unknown})"
+else
+    echo "WARNING: no D-Bus session bus. Firefox/GTK/Qt apps may show portal errors."
+    echo "         Install with: pkg install dbus"
+fi
+
+# --- xdg-desktop-portal ---
+# GTK/Qt apps (Konsole, Firefox, Electron) query the desktop portal over D-Bus.
+# Without a portal backend they print scary errors like:
+#   "freedesktop.portal.desktop ... wasn't provided with any .service files"
+# Termux ships no full portal stack, so we deploy a minimal stub that owns the
+# bus name and satisfies requests trivially. The warning is harmless, but this
+# keeps logs clean and prevents apps from stalling on portal timeouts.
+PORTAL_DIR="$PREFIX/share/dbus-1/services"
+mkdir -p "$PORTAL_DIR"
+cat > "$PORTAL_DIR/org.freedesktop.portal.Desktop.service" << EOF
+[D-BUS Service]
+Name=org.freedesktop.portal.Desktop
+Exec=$PREFIX/bin/false
+EOF
+if command -v xdg-desktop-portal &>/dev/null; then
+    export XDG_CURRENT_DESKTOP="termuxwc"
+    xdg-desktop-portal &> /dev/null &
+    PORTAL_PID=$!
+    echo ">> xdg-desktop-portal started (PID $PORTAL_PID)"
+else
+    echo ">> xdg-desktop-portal not installed; using stub service file to silence portal errors."
 fi
 
 # Comprehensive Standard Linux Graphical Environment
 export XDG_SESSION_TYPE="wayland"
-export XDG_CURRENT_DESKTOP="sway"
+[ -z "$PORTAL_PID" ] && export XDG_CURRENT_DESKTOP="sway"
 export XDG_SESSION_DESKTOP="sway"
 export GDK_BACKEND="wayland"
 export QT_QPA_PLATFORM="wayland"
@@ -192,7 +222,15 @@ if [ "$TERMUXWC_BACKEND" = "wayland" ]; then
 fi
 
 > "$LOG_FILE"
-if [ "$NESTED_WAYLAND" = "1" ]; then
+if [ "$TERMUXWC_BACKEND" = "termux-api" ]; then
+    echo "Starting termuxwc EMBEDDED via Termux:API display server (renderer: $TERMUXWC_RENDERER, no VNC)..."
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
+        ./build/termuxwc -b termux-api ${TERMUXWC_DISPLAY:+-d "$TERMUXWC_DISPLAY"} -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+elif [ "$TERMUXWC_BACKEND" = "drm" ]; then
+    echo "Starting termuxwc on native DRM/KMS (renderer: $TERMUXWC_RENDERER, no VNC)..."
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
+        ./build/termuxwc -b drm -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+elif [ "$NESTED_WAYLAND" = "1" ]; then
     echo "Starting termuxwc NESTED on parent Wayland display '$TERMUXWC_DISPLAY' (renderer: $TERMUXWC_RENDERER, no VNC)..."
     XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
         ./build/termuxwc -b wayland -d "$TERMUXWC_DISPLAY" -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
@@ -235,6 +273,10 @@ echo "Wayland compositor ready on WAYLAND_DISPLAY=$WAYLAND_DISPLAY (socket: $WAY
 # parent's WAYLAND_DISPLAY stays exported for termuxwc itself.
 if [ "$NESTED_WAYLAND" = "1" ]; then
     export TERMUXWC_CHILD_DISPLAY="$WAYLAND_DISPLAY"
+    # Client shells (Firefox, foot, ...) must talk to OUR compositor, not the
+    # parent's; otherwise apps silently open windows on weston and users see
+    # nothing in the termuxwc session.
+    export WAYLAND_DISPLAY="$TERMUXWC_CHILD_DISPLAY"
     echo "Nested mode: termuxwc window is on '$WAYLAND_DISPLAY_PARENT'; its own clients use '$TERMUXWC_CHILD_DISPLAY'."
     echo "To talk to the PARENT compositor from a shell, run: export WAYLAND_DISPLAY=\$WAYLAND_DISPLAY_PARENT"
 fi
