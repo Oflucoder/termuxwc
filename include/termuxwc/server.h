@@ -176,4 +176,45 @@ struct termuxwc_server {
 	int default_refresh_rate;
 };
 
+/* --- Cross-module API (implemented across src/*.c) --- */
+
+/* layout.c */
+void twc_arrange_workspace(struct termuxwc_server *server, int ws_id);
+void twc_arrange_all_workspaces(struct termuxwc_server *server);
+void twc_update_window_borders(struct termuxwc_toplevel *toplevel, bool focused);
+void twc_create_window_borders(struct termuxwc_toplevel *toplevel);
+
+/* cursor.c */
+struct termuxwc_toplevel *twc_desktop_toplevel_at(
+		struct termuxwc_server *server, double lx, double ly,
+		struct wlr_surface **surface, double *sx, double *sy);
+void twc_reset_cursor_mode(struct termuxwc_server *server);
+void twc_begin_interactive(struct termuxwc_toplevel *toplevel,
+		enum termuxwc_cursor_mode mode, uint32_t edges);
+void twc_setup_cursor_listeners(struct termuxwc_server *server);
+
+/* xdg.c */
+void twc_focus_toplevel(struct termuxwc_toplevel *toplevel);
+void twc_switch_workspace(struct termuxwc_server *server, int target_ws);
+void twc_move_toplevel_to_workspace(struct termuxwc_toplevel *toplevel, int target_ws);
+void twc_toggle_floating(struct termuxwc_toplevel *toplevel);
+void twc_toggle_fullscreen(struct termuxwc_toplevel *toplevel);
+void twc_close_active_window(struct termuxwc_server *server);
+void twc_focus_next_window(struct termuxwc_server *server, bool reverse);
+void twc_swap_next_window(struct termuxwc_server *server, bool reverse);
+
+/* inputs.c */
+void twc_setup_input(struct termuxwc_server *server);
+
+/* layers.c */
+void twc_arrange_layers(struct termuxwc_server *server);
+void twc_setup_layer_shell(struct termuxwc_server *server);
+
+/* xdg.c */
+void twc_setup_xdg_shell(struct termuxwc_server *server);
+
+/* outputs.c */
+void twc_setup_outputs(struct termuxwc_server *server);
+int twc_output_frame_interval_ms(const struct termuxwc_server *server);
+
 #endif
