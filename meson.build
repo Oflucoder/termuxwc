@@ -17,6 +17,7 @@ cc = meson.get_compiler('c')
 # Core dependencies (wlroots 0.19.x)
 wlroots_dep = dependency('wlroots-0.19', version: '>=0.19.0', required: true)
 wayland_server_dep = dependency('wayland-server', required: true)
+wayland_server_client_dep = dependency('wayland-client', required: true) // wl_client_connect for -b wayland -d <display>
 xkbcommon_dep = dependency('xkbcommon', required: true)
 pixman_dep = dependency('pixman-1', required: true)
 
@@ -50,7 +51,7 @@ termuxwc_sources = [
 executable('termuxwc',
   termuxwc_sources,
   include_directories: [local_include, protocols_inc],
-  dependencies: [wlroots_dep, wayland_server_dep, xkbcommon_dep, pixman_dep],
+  dependencies: [wlroots_dep, wayland_server_dep, wayland_server_client_dep, xkbcommon_dep, pixman_dep],
   install: true,
 )
 

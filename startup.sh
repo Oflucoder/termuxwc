@@ -172,27 +172,30 @@ TERMUXWC_RENDERER="${TERMUXWC_RENDERER:-pixman}"
 #   drm                -> native Linux only: render directly on the GPU and
 #                         present via KMS page flips (no VNC, no X11)
 TERMUXWC_BACKEND="${TERMUXWC_BACKEND:-headless}"
+# Parent Wayland display for nested mode: name (e.g. weston-0) or full socket
+# path. Defaults to $WAYLAND_DISPLAY. Override via TERMUXWC_DISPLAY.
+TERMUXWC_DISPLAY="${TERMUXWC_DISPLAY:-$WAYLAND_DISPLAY}"
 NESTED_WAYLAND=0
 
 if [ "$TERMUXWC_BACKEND" = "wayland" ]; then
-    if [ -z "$WAYLAND_DISPLAY" ]; then
+    if [ -z "$TERMUXWC_DISPLAY" ]; then
         echo "ERROR: TERMUXWC_BACKEND=wayland requires a PARENT Wayland compositor."
         echo "       Start one first, e.g.:"
         echo "         weston --backend=headless &   # or any real Wayland session"
-        echo "       then re-run this session with TERMUXWC_BACKEND=wayland"
+        echo "       then export WAYLAND_DISPLAY=weston-0 or set TERMUXWC_DISPLAY=<display>"
         exit 1
     fi
     NESTED_WAYLAND=1
     # Nested sockets live in the parent's runtime dir; keep ours separate so
     # termuxwc's own clients don't collide with weston's socket numbering.
-    export WAYLAND_DISPLAY_PARENT="$WAYLAND_DISPLAY"
+    export WAYLAND_DISPLAY_PARENT="$TERMUXWC_DISPLAY"
 fi
 
 > "$LOG_FILE"
 if [ "$NESTED_WAYLAND" = "1" ]; then
-    echo "Starting termuxwc NESTED on parent Wayland display '$WAYLAND_DISPLAY' (renderer: $TERMUXWC_RENDERER, no VNC)..."
+    echo "Starting termuxwc NESTED on parent Wayland display '$TERMUXWC_DISPLAY' (renderer: $TERMUXWC_RENDERER, no VNC)..."
     XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \
-        ./build/termuxwc -b wayland -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
+        ./build/termuxwc -b wayland -d "$TERMUXWC_DISPLAY" -R "$TERMUXWC_RENDERER" -r "$TERMUXWC_FPS" &> "$LOG_FILE" &
 else
     echo "Starting termuxwc Sway-grade compositor (${TERMUXWC_FPS} FPS, Headless, renderer: $TERMUXWC_RENDERER)..."
     XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_RENDERER="$TERMUXWC_RENDERER" \

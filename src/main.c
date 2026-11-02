@@ -20,6 +20,9 @@
 #include "termuxwc/config.h"
 
 #include <getopt.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <wayland-client.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -111,11 +114,12 @@ int main(int argc, char *argv[]) {
 
 	char *startup_cmd = NULL;
 	char *backend_name = NULL;
+	char *display_name = NULL; // parent Wayland display for -b wayland
 	bool force_headless = false;
 	char *custom_renderer = NULL;
 
 	int opt;
-	while ((opt = getopt(argc, argv, "s:w:h:r:HR:b:")) != -1) {
+	while ((opt = getopt(argc, argv, "s:w:h:r:HR:b:d:")) != -1) {
 		switch (opt) {
 		case 's':
 			startup_cmd = optarg;
@@ -141,11 +145,14 @@ int main(int argc, char *argv[]) {
 		case 'b':
 			backend_name = optarg; // auto | drm | wayland | headless
 			break;
+		case 'd':
+			display_name = optarg; // parent display: "weston-0" or full socket path
+			break;
 		default:
 			fprintf(stderr,
 				"Usage: %s [-s <cmd>] [-w <width>] [-h <height>] [-r <fps>]\n"
 				"       [-H (headless)] [-R <auto|gles2|vulkan|pixman>]"
-				" [-b <auto|drm|wayland|headless>]\n", argv[0]);
+				" [-b <auto|drm|wayland|headless>] [-d <display>]\n", argv[0]);
 			return 1;
 		}
 	}
@@ -187,9 +194,43 @@ int main(int argc, char *argv[]) {
 			}
 		} else
 #endif
-		if (backend_name && strcmp(backend_name, "wayland") == 0 &&
-		    getenv("WAYLAND_DISPLAY")) {
-			server.backend = wlr_wl_backend_create(server.event_loop, NULL);
+		if (backend_name && strcmp(backend_name, "wayland") == 0) {
+			// Parent Wayland display: explicit -d <display> wins, otherwise the
+			// WAYLAND_DISPLAY env var. Without one of these we cannot connect.
+			const char *parent = display_name ? display_name : getenv("WAYLAND_DISPLAY");
+			if (!parent) {
+				wlr_log(WLR_ERROR, "-b wayland: display parameter is not set: no parent"
+					" Wayland display found. Pass -d <display> (e.g. -d weston-0)"
+					" or export WAYLAND_DISPLAY before launching.");
+				return 1;
+			}
+			if (strchr(parent, '/')) {
+				// Full socket path given: wl_client_connect needs a struct sockaddr_un
+				struct sockaddr_un addr = { .sun_family = AF_UNIX };
+				strncpy(addr.sun_path, parent, sizeof(addr.sun_path) - 1);
+				int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+				struct wl_client *client = NULL;
+				if (fd >= 0 && connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+					client = wl_client_connect(server.event_loop, fd);
+				}
+				if (client) {
+					server.backend = wlr_wl_backend_create(server.event_loop, client);
+				} else {
+					if (fd >= 0) close(fd);
+					wlr_log(WLR_ERROR, "-b wayland: cannot connect to parent display '%s'",
+						parent);
+					return 1;
+				}
+			} else {
+				// Display name: make sure the Wayland library resolves the same socket
+				setenv("WAYLAND_DISPLAY", parent, 1);
+				server.backend = wlr_wl_backend_create(server.event_loop, NULL);
+				if (!server.backend) {
+					wlr_log(WLR_ERROR, "-b wayland: failed to create backend for parent"
+						" display '%s' (is it running and accessible?)", parent);
+					return 1;
+				}
+			}
 		}
 		else if (backend_name && strcmp(backend_name, "headless") == 0) {
 			server.backend = NULL; // handled by fallback below
