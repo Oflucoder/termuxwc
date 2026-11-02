@@ -8,11 +8,18 @@
 #include "termuxwc/server.h"
 #include "termuxwc/background.h"
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <time.h>
 
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
+#ifdef WLR_BACKEND_HEADLESS
+#include <wlr/backend/headless.h>
+#endif
+#ifdef WLR_BACKEND_WL
+#include <wlr/backend/wayland.h>
+#endif
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_scene.h>
@@ -161,10 +168,28 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	output->destroy.notify = output_destroy;
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 
-	output->frame_timer = wl_event_loop_add_timer(server->event_loop,
-		output_frame_timer_handler, output);
-	wl_event_source_timer_update(output->frame_timer,
-		twc_output_frame_interval_ms(server));
+	/*
+	 * Event-driven backends (DRM/KMS, Wayland parent windows) generate
+	 * their own frame events at the display's refresh rate — a timer
+	 * would double-commit and waste GPU cycles. Only headless/virtual
+	 * outputs need the timer-driven frame pump (used by wayvnc).
+	 */
+	bool event_driven = false;
+#ifdef WLR_BACKEND_HEADLESS
+	event_driven |= wlr_output_is_headless(wlr_output);
+#endif
+#ifdef WLR_BACKEND_WL
+	event_driven |= wlr_output_is_wl(wlr_output);
+#endif
+#ifdef WLR_BACKEND_DRM
+	event_driven |= wlr_output_is_drm(wlr_output);
+#endif
+	if (!event_driven) {
+		output->frame_timer = wl_event_loop_add_timer(server->event_loop,
+			output_frame_timer_handler, output);
+		wl_event_source_timer_update(output->frame_timer,
+			twc_output_frame_interval_ms(server));
+	}
 
 	wl_list_insert(&server->outputs, &output->link);
 

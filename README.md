@@ -40,9 +40,20 @@ curl -sL https://raw.githubusercontent.com/Oflucoder/termuxwc/main/install.sh | 
 
 The installer automatically:
 1. Installs all required Termux dependencies (`wayvnc`, `foot`, `virglrenderer-android`, `pixman`, `libxkbcommon`).
-2. Deploys the precompiled, Android-patched `libwlroots-0.19.so` and `termuxwc` binaries.
-3. Generates the default configuration file (`~/.config/termuxwc/config`).
-4. Adds the global `termuxwc-session` command to your path.
+2. Ensures wlroots 0.19 is available (Termux package if present, otherwise it clones upstream 0.19.0 and builds it into `$PREFIX`).
+3. Builds `termuxwc` from this checkout with meson/ninja — **no patched binaries, no downloaded protocol tarballs**: every protocol source needed (xdg-shell, wlr-layer-shell) is vendored under `include/protocols/`, so a plain `git clone` is self-sufficient.
+4. Generates the default configuration file (`~/.config/termuxwc/config`).
+5. Adds the global `termuxwc-session` command to your path.
+
+### Native Linux installation
+
+The same script detects non-Termux environments and uses your distro packages instead:
+
+```bash
+git clone https://github.com/Oflucoder/termuxwc.git
+cd termuxwc
+./install.sh        # apt/dnf deps + meson install to /usr/local
+```
 
 ### Launching the Desktop
 
@@ -180,7 +191,19 @@ TERMUXWC_FPS=120 termuxwc-session
 ```
 
 ### Complete Graphical Environment & Session Profile
-`termuxwc-session` initializes a complete Linux graphical environment including a D-Bus session bus (`dbus-launch`), standard toolkit bridges (`GDK_BACKEND=wayland`, `QT_QPA_PLATFORM=wayland`, `SDL_VIDEODRIVER=wayland`), XDG directories, and GPU variables. 
+`termuxwc-session` initializes a complete Linux graphical environment including a D-Bus session bus (`dbus-launch`), standard toolkit bridges (`GDK_BACKEND=wayland`, `QT_QPA_PLATFORM=wayland`, `SDL_VIDEODRIVER=wayland`), XDG directories, and GPU variables.
+
+**App launch checklist (Firefox / Konsole / Electron):**
+1. Always start apps from a shell where the session profile is sourced:
+   ```bash
+   source ~/.config/termuxwc/env && firefox &
+   ```
+2. **Firefox "no DISPLAY was provided"**: Firefox still probes legacy display vars before Wayland. Either set `MOZ_ENABLE_WAYLAND=1` (already exported by the session) *and* make sure `WAYLAND_DISPLAY` points at termuxwc's own socket, or pass it explicitly:
+   ```bash
+   env WAYLAND_DISPLAY="$WAYLAND_DISPLAY" MOZ_ENABLE_WAYLAND=1 firefox &
+   ```
+3. **Konsole portal/D-Bus errors** (`freedesktop.portal.desktop ... wasn't provided with any .service files`): this means no `xdg-desktop-portal` backend is registered on the session bus. The session now drops a stub service file into `$PREFIX/share/dbus-1/services/` to silence it; for full functionality install a portal implementation if available (`pkg install xdg-desktop-portal`). The message itself is non-fatal — Konsole will run fine without portals.
+4. If you see portal errors anyway, ensure `DBUS_SESSION_BUS_ADDRESS` is exported (install `dbus`: `pkg install dbus`) — portal lookups fail without a session bus.
 
 All session environment variables are automatically written to `~/.config/termuxwc/env` on session start and can be sourced anywhere:
 ```bash
@@ -243,6 +266,18 @@ Ship a tiny wlroots-based host compositor (Weston/Cage work out of the box) insi
 
 In all cases add `GALLIUM_DRIVER=virpipe` (or the Turnip/ANGLE env from the VirGL section) so client apps keep GPU acceleration through the bridge.
 
+### Path 2b - Termux:API embedded display (`-b termux-api`, no root, no VNC)
+If the Termux app hosts a display session through **Termux:API** (the same mechanism Termux:X11 uses, but exposing a Wayland socket via `TERMUX_DISPLAY`), termuxwc connects to it as a client and presents frames directly into the app window — zero-copy EGL presentation on the device GPU:
+
+```bash
+# TERMUX_DISPLAY is exported by the app when it starts the session; you can also pass it manually:
+termuxwc -b termux-api -d "$TERMUX_DISPLAY" -R gles2
+# or through the supervisor:
+TERMUXWC_BACKEND=termux-api termuxwc-session
+```
+
+Resolution order for the parent display: `-d <display>` → `$TERMUX_DISPLAY` → `$WAYLAND_DISPLAY`. The compositor's *own* clients still get a fresh auto-assigned socket, so nested sessions never collide with the host's socket numbering. This path requires no root and no network; latency is bounded only by the app's SurfaceFlinger composition (~5-10 ms).
+
 ### Path 3 - Zero-copy dmabuf capture for your own viewer app
 When pixels must be shipped into your own Android application (SurfaceView) without VNC, use the `zwlr_screencopy_manager_v1` global that termuxwc already exposes together with `zwp_linux_dmabuf_v1` (created from the GLES renderer at startup). With `-R gles2`, captured buffers are exported as **dmabufs** (AHardwareBuffer-backed on Adreno/Mali under Termux), so a small screencopy client inside your app can import them with `EGL_EXT_image_dma_buf_import` and blit straight onto the `NativeWindow` - one GPU-side copy, no JPEG/H.264 encode round-trip like wayvnc performs. This requires writing a few hundred lines of capture code in the app; the compositor side needs no changes.
 
@@ -263,6 +298,7 @@ glxinfo | grep -i opengl    # should report "virgl" / Turnip / ANGLE
 | Headless + wayvnc (default) | pixman (CPU) | VNC TCP stream | ~30-60 ms | No |
 | Headless + gles2 + wayvnc | gles2 (VirGL -> GPU) | VNC TCP stream | ~20-40 ms | No |
 | Nested Wayland (`-b wayland`) | gles2 | Parent Wayland compositor | ~10 ms | No |
+| Termux:API embedded (`-b termux-api`) | gles2 | App window via `TERMUX_DISPLAY` socket | ~5-10 ms | No |
 | DRM (`-b drm`) | gles2 (GBM) | Page flip | <5 ms | Yes/groups |
 | Screencopy dmabuf -> SurfaceView | gles2 | Zero-copy import | ~5-10 ms | No |
 
@@ -299,6 +335,9 @@ pkg update
 pkg install clang meson ninja pkg-config libwayland wayland-protocols \
             libxkbcommon libpixman wayvnc foot virglrenderer-android
 ```
+
+> [!TIP]
+> You do **not** need to fetch or patch `wayland-protocols` yourself: the generated C sources for xdg-shell and wlr-layer-shell are committed under `include/protocols/` and compiled directly by `meson.build`.
 
 ### 2. Patch & Build wlroots 0.19.1
 

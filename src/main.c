@@ -33,11 +33,14 @@
 
 #include <wlr/backend.h>
 #include <wlr/backend/headless.h>
+#define WLR_BACKEND_HEADLESS 1 // headless outputs use the timer frame pump
 #include <wlr/backend/multi.h>
 #ifdef WLR_BACKEND_DRM
 #include <wlr/backend/drm.h>
+#define TWC_HAS_DRM 1
 #endif
 #include <wlr/backend/wayland.h>
+#define WLR_BACKEND_WL 1 // outputs from this backend are event-driven
 #include <wlr/render/egl.h>
 #include <wlr/render/gles.h>
 #include <wlr/render/interface.h>
@@ -184,7 +187,7 @@ int main(int argc, char *argv[]) {
 	// VNC at all); otherwise we prefer nested Wayland (works under any
 	// session), then headless. Explicit choice via -b <backend>.
 	if (!force_headless) {
-#ifdef WLR_BACKEND_DRM
+#ifdef TWC_HAS_DRM
 		if (backend_name && strcmp(backend_name, "drm") == 0) {
 			// Native DRM/GBM backend: the compositor renders directly on the
 			// physical GPU and presents via KMS page flips. Needs a free DRM
@@ -361,7 +364,25 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	const char *socket = wl_display_add_socket_auto(server.wl_display);
+	/*
+	 * Bind the Wayland socket. When a fixed display name is already present
+	 * in the environment (e.g. Termux:API sessions always use "wayland-1"),
+	 * bind exactly that name so clients inheriting the env connect to us
+	 * instead of the parent compositor. Otherwise auto-select.
+	 */
+	const char *socket = NULL;
+	const char *want_socket = getenv("WAYLAND_DISPLAY");
+	if (want_socket && *want_socket && !strchr(want_socket, '/')) {
+		if (wl_display_add_socket(server.wl_display, want_socket) == 0) {
+			socket = want_socket;
+		} else {
+			wlr_log(WLR_INFO, "Requested socket '%s' unavailable;"
+				" falling back to auto-assignment", want_socket);
+		}
+	}
+	if (!socket) {
+		socket = wl_display_add_socket_auto(server.wl_display);
+	}
 	if (!socket) {
 		wlr_log(WLR_ERROR, "Failed to create socket");
 		return 1;
